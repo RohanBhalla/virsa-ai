@@ -42,6 +42,7 @@ def health() -> dict[str, str]:
 async def create_memory(
     audio: UploadFile = File(...),
     title: str = Form(default="Untitled Memory"),
+    speaker_tag: str = Form(default=""),
 ) -> dict:
     if not audio.filename:
         raise HTTPException(status_code=400, detail="Audio filename missing")
@@ -54,16 +55,23 @@ async def create_memory(
         shutil.copyfileobj(audio.file, buffer)
 
     now = now_iso()
+    clean_title = title.strip() or "Untitled Memory"
+    clean_speaker_tag = speaker_tag.strip()
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO memories(id, title, audio_path, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO memories(id, title, speaker_tag, audio_path, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (memory_id, title.strip() or "Untitled Memory", str(audio_path), now, now),
+            (memory_id, clean_title, clean_speaker_tag, str(audio_path), now, now),
         )
 
-    return {"id": memory_id, "title": title, "audio_url": f"/api/memories/{memory_id}/audio"}
+    return {
+        "id": memory_id,
+        "title": clean_title,
+        "speaker_tag": clean_speaker_tag,
+        "audio_url": f"/api/memories/{memory_id}/audio",
+    }
 
 
 @app.get("/api/memories")

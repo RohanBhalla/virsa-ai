@@ -16,10 +16,11 @@ export async function listMemories(): Promise<Memory[]> {
   return data.items
 }
 
-export async function createMemory(file: Blob, title: string): Promise<{ id: string }> {
+export async function createMemory(file: Blob, title: string, speakerTag: string): Promise<{ id: string }> {
   const fd = new FormData()
   fd.append('audio', file, 'memory.webm')
   fd.append('title', title)
+  fd.append('speaker_tag', speakerTag)
   return fetchJson<{ id: string }>('/api/memories', { method: 'POST', body: fd })
 }
 

@@ -1,6 +1,7 @@
 export type Memory = {
   id: string
   title: string
+  speaker_tag: string
   audio_path: string
   transcript: string
   story_short: string

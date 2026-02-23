@@ -131,7 +131,7 @@ body::after {
 
 h1 {
   margin: 0.4rem 0;
-  font-size: clamp(2.2rem, 6.2vw, 4.8rem);
+  font-size: clamp(2.8rem, 8vw, 6.2rem);
   line-height: 1.1;
 }
 
@@ -182,14 +182,215 @@ p {
 
 .recorder-panel {
   display: grid;
-  gap: 0.9rem;
+  place-items: center;
+  min-height: clamp(440px, 68vh, 740px);
+  padding: clamp(1.1rem, 3vh, 1.8rem);
+}
+
+.record-view {
+  min-height: clamp(500px, 74vh, 820px);
+  align-content: center;
 }
 
 .recorder {
+  display: grid;
+  justify-items: center;
+  gap: 1rem;
+  padding: 0.7rem 0.2rem 0.3rem;
+  width: 100%;
+}
+
+.record-button {
+  width: clamp(200px, 52vw, 290px);
+  aspect-ratio: 1;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  color: rgba(24, 19, 14, 0.85);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.12)),
+    linear-gradient(165deg, rgba(186, 114, 6, 0.78), rgba(161, 94, 0, 0.56) 55%, rgba(129, 73, 0, 0.58) 100%);
+  backdrop-filter: blur(18px) saturate(1.22);
+  -webkit-backdrop-filter: blur(18px) saturate(1.22);
+  box-shadow:
+    0 16px 30px rgba(24, 20, 14, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    inset 0 -8px 18px rgba(255, 255, 255, 0.1);
+  transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease, color 180ms ease;
+  animation: glassFloat 5.5s ease-in-out infinite;
+}
+
+.record-button:hover {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.16)),
+    linear-gradient(165deg, rgba(186, 114, 6, 0.84), rgba(169, 100, 0, 0.62) 55%, rgba(138, 80, 2, 0.64) 100%);
+}
+
+.record-button::before,
+.record-pause-button::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.03) 48%);
+  opacity: 0.48;
+  animation: glassShimmer 3.2s ease-in-out infinite alternate;
+}
+
+.record-button:hover,
+.record-pause-button:hover {
+  transform: translateY(-1px) scale(1.01);
+  color: rgba(20, 15, 11, 0.92);
+  box-shadow:
+    0 18px 34px rgba(24, 20, 14, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    inset 0 -9px 20px rgba(255, 255, 255, 0.12);
+}
+
+.record-button:active {
+  transform: scale(0.97);
+}
+
+.record-button:focus-visible,
+.record-pause-button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 5px var(--ring),
+    0 18px 34px rgba(24, 20, 14, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    inset 0 -9px 20px rgba(255, 255, 255, 0.12);
+}
+
+.record-button.is-recording {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.54), rgba(255, 255, 255, 0.2)),
+    linear-gradient(165deg, rgba(211, 74, 74, 0.5), rgba(174, 31, 54, 0.34) 55%, rgba(122, 18, 39, 0.34) 100%);
+  box-shadow:
+    0 0 0 0 rgba(174, 31, 54, 0.34),
+    0 16px 30px rgba(24, 20, 14, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -8px 18px rgba(255, 255, 255, 0.12);
+  animation: recordPulse 1.5s ease-out infinite;
+}
+
+.record-mic-icon {
+  width: 42%;
+  height: 42%;
+  fill: #ffffff;
+  position: relative;
+  z-index: 2;
+  filter: drop-shadow(0 2px 3px rgba(24, 19, 14, 0.26));
+}
+
+.waveform-wrap {
+  width: min(100%, 620px);
+  height: clamp(86px, 12vh, 124px);
+  padding: 0.4rem 0;
+}
+
+.waveform-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.record-controls {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.record-form {
+  width: min(100%, 620px);
+  display: grid;
   gap: 0.7rem;
+  margin-top: 0.2rem;
+}
+
+.record-form-fields {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.record-form-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.record-pause-button {
+  width: 76px;
+  height: 76px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  color: rgba(24, 19, 14, 0.85);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.16)),
+    linear-gradient(165deg, rgba(216, 120, 27, 0.52), rgba(186, 114, 6, 0.28) 55%, rgba(153, 86, 0, 0.3) 100%);
+  backdrop-filter: blur(18px) saturate(1.22);
+  -webkit-backdrop-filter: blur(18px) saturate(1.22);
+  box-shadow:
+    0 12px 24px rgba(24, 20, 14, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    inset 0 -8px 18px rgba(255, 255, 255, 0.1);
+  transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease, color 180ms ease;
+  animation: glassFloat 5.5s ease-in-out infinite;
+}
+
+.record-pause-button:active {
+  transform: scale(0.96);
+}
+
+.record-pause-button.is-paused {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.54), rgba(255, 255, 255, 0.2)),
+    linear-gradient(165deg, rgba(211, 74, 74, 0.5), rgba(174, 31, 54, 0.34) 55%, rgba(122, 18, 39, 0.34) 100%);
+  box-shadow:
+    0 12px 24px rgba(24, 20, 14, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -8px 18px rgba(255, 255, 255, 0.12);
+}
+
+.record-pause-button svg {
+  width: 24px;
+  height: 24px;
+  fill: #ffffff;
+  position: relative;
+  z-index: 2;
+  filter: drop-shadow(0 2px 3px rgba(24, 19, 14, 0.26));
+}
+
+@keyframes recordPulse {
+  0% {
+    box-shadow:
+      0 0 0 0 rgba(174, 31, 54, 0.32),
+      0 16px 30px rgba(24, 20, 14, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.72),
+      inset 0 -8px 18px rgba(255, 255, 255, 0.12);
+  }
+  70% {
+    box-shadow:
+      0 0 0 18px rgba(174, 31, 54, 0),
+      0 16px 30px rgba(24, 20, 14, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.72),
+      inset 0 -8px 18px rgba(255, 255, 255, 0.12);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(174, 31, 54, 0),
+      0 16px 30px rgba(24, 20, 14, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.72),
+      inset 0 -8px 18px rgba(255, 255, 255, 0.12);
+  }
 }
 
 .upload-row {

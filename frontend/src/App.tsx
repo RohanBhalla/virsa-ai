@@ -55,24 +55,25 @@ function CoverRail({ title, items }: { title: string; items: Memory[] }) {
 
 export default function App() {
   const [route, setRoute] = useState(parseHash())
-  const [title, setTitle] = useState('')
-  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
   const [memories, setMemories] = useState<Memory[]>([])
   const [loading, setLoading] = useState(true)
-  const [status, setStatus] = useState('')
-  const [error, setError] = useState('')
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
+  const [draftTitle, setDraftTitle] = useState('')
+  const [draftSpeaker, setDraftSpeaker] = useState('')
+  const [recordStatus, setRecordStatus] = useState('')
+  const [recordError, setRecordError] = useState('')
+  const [isSavingRecord, setIsSavingRecord] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'covers' | 'stories'>('all')
   const [searchExpanded, setSearchExpanded] = useState(false)
 
   async function loadMemories() {
     setLoading(true)
-    setError('')
     try {
       const data = await listMemories()
       setMemories(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load memories')
+    } catch {
+      // Keep the home view quiet for now; we'll add richer error states in a later step.
     } finally {
       setLoading(false)
     }
@@ -142,8 +143,6 @@ export default function App() {
     }
   }, [route.view, searchExpanded])
 
-  const canUpload = useMemo(() => !!recordedBlob, [recordedBlob])
-
   const searchResults = useMemo(() => {
     const q = search.trim().toLowerCase()
     return memories.filter((item) => {
@@ -163,27 +162,7 @@ export default function App() {
     () => [...memories].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 8),
     [memories],
   )
-
-  async function onUpload() {
-    if (!recordedBlob) return
-    setStatus('Uploading recording...')
-    setError('')
-    try {
-      const created = await createMemory(recordedBlob, title || `Memory ${new Date().toLocaleDateString()}`)
-      setStatus('Transcribing with ElevenLabs...')
-      await transcribeMemory(created.id)
-      setStatus('Building story with RAG context...')
-      await generateStory(created.id, 'Create a warm family storybook chapter based on this memory.')
-      setStatus('Designing story cover...')
-      await generateCover(created.id, 'Storybook cover with warm, nostalgic family tones')
-      setRecordedBlob(null)
-      setTitle('')
-      await loadMemories()
-      setStatus('Memory fully processed: transcript, story, and cover are ready.')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Processing failed')
-    }
-  }
+  const canSaveRecording = !!recordedBlob && !!draftTitle.trim() && !!draftSpeaker.trim() && !isSavingRecord
 
   const detailItem = route.view === 'detail' ? memories.find((m) => m.id === route.id) : undefined
   const wallId = 'cover-wall-strip'
@@ -192,6 +171,37 @@ export default function App() {
     const rail = document.getElementById(wallId)
     if (!rail) return
     rail.scrollBy({ left: rail.clientWidth * 0.9, behavior: 'smooth' })
+  }
+
+  async function saveRecordedMemory() {
+    if (!recordedBlob || !draftTitle.trim() || !draftSpeaker.trim()) return
+
+    setIsSavingRecord(true)
+    setRecordError('')
+
+    try {
+      setRecordStatus('Saving recording...')
+      const created = await createMemory(recordedBlob, draftTitle.trim(), draftSpeaker.trim())
+
+      setRecordStatus('Transcribing with ElevenLabs...')
+      await transcribeMemory(created.id)
+
+      setRecordStatus('Building story with RAG context...')
+      await generateStory(created.id, 'Create a warm family storybook chapter based on this memory.')
+
+      setRecordStatus('Designing story cover...')
+      await generateCover(created.id, 'Storybook cover with warm, nostalgic family tones')
+
+      await loadMemories()
+      setRecordStatus('Saved. Transcript and story are ready.')
+      setRecordedBlob(null)
+      setDraftTitle('')
+      setDraftSpeaker('')
+    } catch (err) {
+      setRecordError(err instanceof Error ? err.message : 'Failed to save recording')
+    } finally {
+      setIsSavingRecord(false)
+    }
   }
 
   return (
@@ -234,39 +244,42 @@ export default function App() {
       ) : null}
 
       {route.view === 'record' ? (
-        <div className="view-shell">
+        <div className="view-shell record-view">
           <section className="panel recorder-panel">
-            <div>
-              <h2>Record a New Memory</h2>
-              <p>Save once and we automatically generate transcript, story, and cover.</p>
-            </div>
-            <Recorder onReady={(blob) => setRecordedBlob(blob)} />
-            <div className="upload-row">
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="title-input"
-                placeholder="Memory title (optional)"
-              />
-              <button className="btn btn-primary" disabled={!canUpload} onClick={onUpload}>Save and Generate</button>
-            </div>
-            {recordedBlob ? <p className="recorder-status">Recording ready: {(recordedBlob.size / 1024).toFixed(1)} KB</p> : null}
-            {status ? <p className="status-text">{status}</p> : null}
-            {error ? <p className="error-text">{error}</p> : null}
-          </section>
-
-          <section className="panel">
-            <h2>Recent Recordings</h2>
-            <p className="meta">Placeholder list until full recording detail pages are built.</p>
-            <div className="record-list">
-              {memories.slice(0, 10).map((item) => (
-                <button key={item.id} className="record-item" onClick={() => navigate(`/recordings/${item.id}`)}>
-                  <strong>{item.title}</strong>
-                  <span className="meta">{new Date(item.created_at).toLocaleString()}</span>
-                </button>
-              ))}
-            </div>
+            <Recorder
+              onReady={(blob) => {
+                setRecordedBlob(blob)
+                setRecordError('')
+                setRecordStatus('')
+              }}
+            />
+            {recordedBlob ? (
+              <div className="record-form">
+                <div className="record-form-fields">
+                  <input
+                    type="text"
+                    className="title-input"
+                    placeholder="Memory title"
+                    value={draftTitle}
+                    onChange={(e) => setDraftTitle(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    className="title-input"
+                    placeholder="Speaker tag"
+                    value={draftSpeaker}
+                    onChange={(e) => setDraftSpeaker(e.target.value)}
+                  />
+                </div>
+                <div className="record-form-actions">
+                  <button type="button" className="btn btn-primary" disabled={!canSaveRecording} onClick={saveRecordedMemory}>
+                    {isSavingRecord ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+                {recordStatus ? <p className="status-text">{recordStatus}</p> : null}
+                {recordError ? <p className="error-text">{recordError}</p> : null}
+              </div>
+            ) : null}
           </section>
         </div>
       ) : null}

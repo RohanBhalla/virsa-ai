@@ -33,6 +33,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY,
                 title TEXT,
+                speaker_tag TEXT DEFAULT '',
                 audio_path TEXT NOT NULL,
                 transcript TEXT DEFAULT '',
                 story_short TEXT DEFAULT '',
@@ -57,6 +58,10 @@ def init_db() -> None:
             """
         )
 
+        memory_cols = {row["name"] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
+        if "speaker_tag" not in memory_cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN speaker_tag TEXT DEFAULT ''")
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -66,6 +71,7 @@ def row_to_memory(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "title": row["title"],
+        "speaker_tag": row["speaker_tag"] if "speaker_tag" in row.keys() else "",
         "audio_path": row["audio_path"],
         "transcript": row["transcript"],
         "story_short": row["story_short"],
