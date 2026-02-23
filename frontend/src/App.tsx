@@ -305,17 +305,50 @@ export default function App() {
 
       {route.view === 'detail' ? (
         <div className="view-shell">
-          <section className="panel">
-            <h2>Recording Page (Placeholder)</h2>
+          <section className="panel recording-detail">
             {detailItem ? (
               <>
-                <p><strong>{detailItem.title}</strong></p>
-                <p className="meta">This is a placeholder. Next step: dedicated recording page with transcript sections, playback, and story variants.</p>
+                <div className="detail-head">
+                  <h2>{detailItem.title}</h2>
+                  <p className="meta">{new Date(detailItem.created_at).toLocaleString()}</p>
+                </div>
+
+                <section className="detail-block">
+                  <h3>Cover Photo</h3>
+                  {detailItem.cover_path ? (
+                    <img
+                      src={toAssetUrl(`/covers/${detailItem.id}.svg`)}
+                      alt={`${detailItem.title} cover`}
+                      className="detail-cover"
+                    />
+                  ) : (
+                    <div className="detail-cover placeholder">Cover photo not available yet.</div>
+                  )}
+                </section>
+
+                <section className="detail-block">
+                  <h3>AI Story Summary</h3>
+                  <p className="detail-summary">
+                    {detailItem.story_short || detailItem.story_long || 'AI summary not generated yet.'}
+                  </p>
+                </section>
+
+                <section className="detail-block">
+                  <h3>Play Audio</h3>
+                  <audio
+                    className="detail-audio"
+                    controls
+                    preload="metadata"
+                    src={toAssetUrl(detailItem.audio_path)}
+                  >
+                    Your browser does not support the audio element.
+                  </audio>
+                </section>
               </>
             ) : (
               <p className="meta">Recording not found.</p>
             )}
-            <button className="btn btn-primary" onClick={() => navigate('/')}>Back Home</button>
+            <button className="btn btn-primary detail-back" onClick={() => navigate('/')}>Back Home</button>
           </section>
         </div>
       ) : null}

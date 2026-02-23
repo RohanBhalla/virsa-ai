@@ -68,11 +68,13 @@ def now_iso() -> str:
 
 
 def row_to_memory(row: sqlite3.Row) -> dict[str, Any]:
+    memory_id = row["id"]
     return {
-        "id": row["id"],
+        "id": memory_id,
         "title": row["title"],
         "speaker_tag": row["speaker_tag"] if "speaker_tag" in row.keys() else "",
-        "audio_path": row["audio_path"],
+        # Expose a stable API URL to clients; filesystem paths stay internal.
+        "audio_path": f"/api/memories/{memory_id}/audio",
         "transcript": row["transcript"],
         "story_short": row["story_short"],
         "story_long": row["story_long"],

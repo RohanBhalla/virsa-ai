@@ -38,6 +38,21 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def resolve_audio_file(memory_id: str, stored_path: str) -> Path | None:
+    raw = (stored_path or "").strip()
+    if raw:
+        candidate = Path(raw)
+        if candidate.exists():
+            return candidate
+        if not candidate.is_absolute():
+            from_audio_dir = AUDIO_DIR / candidate
+            if from_audio_dir.exists():
+                return from_audio_dir
+
+    matches = sorted(AUDIO_DIR.glob(f"{memory_id}.*"))
+    return matches[0] if matches else None
+
+
 @app.post("/api/memories")
 async def create_memory(
     audio: UploadFile = File(...),
@@ -70,6 +85,7 @@ async def create_memory(
         "id": memory_id,
         "title": clean_title,
         "speaker_tag": clean_speaker_tag,
+        "audio_path": f"/api/memories/{memory_id}/audio",
         "audio_url": f"/api/memories/{memory_id}/audio",
     }
 
@@ -97,8 +113,8 @@ def get_memory_audio(memory_id: str) -> FileResponse:
     if not row:
         raise HTTPException(status_code=404, detail="Memory not found")
 
-    audio_path = Path(row["audio_path"])
-    if not audio_path.exists():
+    audio_path = resolve_audio_file(memory_id, row["audio_path"])
+    if not audio_path:
         raise HTTPException(status_code=404, detail="Audio file not found")
     return FileResponse(audio_path)
 
@@ -110,8 +126,8 @@ async def transcribe_memory(memory_id: str) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail="Memory not found")
 
-    audio_path = Path(row["audio_path"])
-    if not audio_path.exists():
+    audio_path = resolve_audio_file(memory_id, row["audio_path"])
+    if not audio_path:
         raise HTTPException(status_code=404, detail="Audio file not found")
 
     transcript, ok, message = await transcribe_with_elevenlabs(audio_path)
@@ -121,8 +137,8 @@ async def transcribe_memory(memory_id: str) -> dict:
     chunk_count = index_transcript(memory_id, transcript)
     with get_conn() as conn:
         conn.execute(
-            "UPDATE memories SET transcript = ?, updated_at = ? WHERE id = ?",
-            (transcript, now_iso(), memory_id),
+            "UPDATE memories SET transcript = ?, audio_path = ?, updated_at = ? WHERE id = ?",
+            (transcript, str(audio_path), now_iso(), memory_id),
         )
 
     return {"id": memory_id, "transcript": transcript, "chunks_indexed": chunk_count}
