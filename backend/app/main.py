@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from uuid import uuid4
@@ -130,18 +131,23 @@ async def transcribe_memory(memory_id: str) -> dict:
     if not audio_path:
         raise HTTPException(status_code=404, detail="Audio file not found")
 
-    transcript, ok, message = await transcribe_with_elevenlabs(audio_path)
+    transcript, transcript_timing, ok, message = await transcribe_with_elevenlabs(audio_path)
     if not ok:
         raise HTTPException(status_code=502, detail=message)
 
     chunk_count = index_transcript(memory_id, transcript)
     with get_conn() as conn:
         conn.execute(
-            "UPDATE memories SET transcript = ?, audio_path = ?, updated_at = ? WHERE id = ?",
-            (transcript, str(audio_path), now_iso(), memory_id),
+            "UPDATE memories SET transcript = ?, transcript_timing = ?, audio_path = ?, updated_at = ? WHERE id = ?",
+            (transcript, json.dumps(transcript_timing), str(audio_path), now_iso(), memory_id),
         )
 
-    return {"id": memory_id, "transcript": transcript, "chunks_indexed": chunk_count}
+    return {
+        "id": memory_id,
+        "transcript": transcript,
+        "transcript_timing": transcript_timing,
+        "chunks_indexed": chunk_count,
+    }
 
 
 @app.post("/api/memories/{memory_id}/story")

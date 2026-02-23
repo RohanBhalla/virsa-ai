@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE, createMemory, generateCover, generateStory, listMemories, toAssetUrl, transcribeMemory } from './api'
 import { Recorder } from './components/Recorder'
-import type { Memory } from './types'
+import type { Memory, TranscriptWord } from './types'
 
 type View = 'home' | 'record' | 'detail'
 
@@ -37,6 +37,98 @@ function animateScrollByX(el: HTMLElement, distance: number, duration = 420) {
   }
 
   requestAnimationFrame(tick)
+}
+
+type LyricLine = {
+  text: string
+  start: number
+  end: number
+}
+
+const NO_SPACE_BEFORE_RE = /^[.,!?;:%)\]}]/
+const NO_SPACE_AFTER_RE = /^[([{]$/
+
+function joinTranscriptTokens(tokens: string[]): string {
+  if (tokens.length === 0) return ''
+  let text = ''
+  for (const token of tokens) {
+    const cleaned = token.trim()
+    if (!cleaned) continue
+
+    if (!text) {
+      text = cleaned
+      continue
+    }
+
+    const prevChar = text.slice(-1)
+    if (NO_SPACE_BEFORE_RE.test(cleaned) || NO_SPACE_AFTER_RE.test(prevChar)) {
+      text += cleaned
+    } else {
+      text += ` ${cleaned}`
+    }
+  }
+  return text.trim()
+}
+
+function buildLyricLines(words: TranscriptWord[]): LyricLine[] {
+  if (words.length === 0) return []
+
+  const lines: LyricLine[] = []
+  let lineWords: TranscriptWord[] = []
+
+  const pushLine = () => {
+    if (lineWords.length === 0) return
+    const text = joinTranscriptTokens(lineWords.map((word) => word.text))
+    if (text) {
+      lines.push({
+        text,
+        start: lineWords[0].start,
+        end: lineWords[lineWords.length - 1].end,
+      })
+    }
+    lineWords = []
+  }
+
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i]
+    const prev = lineWords[lineWords.length - 1]
+    const gap = prev ? word.start - prev.end : 0
+    const shouldBreakBeforeWord = lineWords.length >= 1 && (gap > 1.2 || lineWords.length >= 12)
+    if (shouldBreakBeforeWord) pushLine()
+
+    lineWords.push(word)
+
+    const punctuationBreak = /[.!?]$/.test(word.text)
+    if (punctuationBreak && lineWords.length >= 6) pushLine()
+  }
+
+  pushLine()
+  return lines
+}
+
+function findActiveLineIndex(lines: LyricLine[], currentTime: number): number {
+  if (lines.length === 0) return -1
+
+  let lo = 0
+  let hi = lines.length - 1
+  let best = -1
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (lines[mid].start <= currentTime) {
+      best = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  if (best < 0) return 0
+  return best
+}
+
+function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
 function CoverRail({ title, items }: { title: string; items: Memory[] }) {
@@ -85,6 +177,9 @@ export default function App() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'covers' | 'stories'>('all')
   const [searchExpanded, setSearchExpanded] = useState(false)
+  const [playheadSeconds, setPlayheadSeconds] = useState(0)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const lyricLineRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   async function loadMemories() {
     setLoading(true)
@@ -184,7 +279,21 @@ export default function App() {
   const canSaveRecording = !!recordedBlob && !!draftTitle.trim() && !!draftSpeaker.trim() && !isSavingRecord
 
   const detailItem = route.view === 'detail' ? memories.find((m) => m.id === route.id) : undefined
+  const lyricLines = useMemo(() => buildLyricLines(detailItem?.transcript_timing || []), [detailItem?.transcript_timing])
+  const activeLyricIndex = useMemo(() => findActiveLineIndex(lyricLines, playheadSeconds), [lyricLines, playheadSeconds])
   const wallId = 'cover-wall-strip'
+
+  useEffect(() => {
+    lyricLineRefs.current = []
+    setPlayheadSeconds(0)
+  }, [detailItem?.id])
+
+  useEffect(() => {
+    if (route.view !== 'detail' || activeLyricIndex < 0) return
+    const el = lyricLineRefs.current[activeLyricIndex]
+    if (!el) return
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [activeLyricIndex, route.view])
 
   function scrollWallNext() {
     const rail = document.getElementById(wallId)
@@ -221,6 +330,16 @@ export default function App() {
     } finally {
       setIsSavingRecord(false)
     }
+  }
+
+  function seekToLyric(seconds: number) {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.currentTime = seconds
+    setPlayheadSeconds(seconds)
+    void audio.play().catch(() => {
+      // Ignore autoplay constraints if the browser blocks programmatic playback.
+    })
   }
 
   return (
@@ -336,13 +455,43 @@ export default function App() {
                 <section className="detail-block">
                   <h3>Play Audio</h3>
                   <audio
+                    ref={audioRef}
                     className="detail-audio"
                     controls
                     preload="metadata"
                     src={toAssetUrl(detailItem.audio_path)}
+                    onTimeUpdate={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
+                    onSeeked={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
+                    onLoadedMetadata={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
                   >
                     Your browser does not support the audio element.
                   </audio>
+                </section>
+
+                <section className="detail-block">
+                  <h3>Live Transcript</h3>
+                  {lyricLines.length > 0 ? (
+                    <div className="lyrics-panel spring-scroll">
+                      {lyricLines.map((line, idx) => (
+                        <button
+                          key={`${line.start}-${idx}`}
+                          ref={(element) => {
+                            lyricLineRefs.current[idx] = element
+                          }}
+                          type="button"
+                          className={`lyric-line ${idx === activeLyricIndex ? 'lyric-line-active' : ''}`}
+                          onClick={() => seekToLyric(line.start)}
+                        >
+                          <span className="lyric-line-time">{formatTime(line.start)}</span>
+                          <span>{line.text}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="detail-transcript-fallback">
+                      {detailItem.transcript || 'Transcript not available yet. Save and transcribe this recording first.'}
+                    </p>
+                  )}
                 </section>
               </>
             ) : (

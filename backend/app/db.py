@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -36,6 +37,7 @@ def init_db() -> None:
                 speaker_tag TEXT DEFAULT '',
                 audio_path TEXT NOT NULL,
                 transcript TEXT DEFAULT '',
+                transcript_timing TEXT DEFAULT '[]',
                 story_short TEXT DEFAULT '',
                 story_long TEXT DEFAULT '',
                 cover_path TEXT DEFAULT '',
@@ -61,6 +63,8 @@ def init_db() -> None:
         memory_cols = {row["name"] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
         if "speaker_tag" not in memory_cols:
             conn.execute("ALTER TABLE memories ADD COLUMN speaker_tag TEXT DEFAULT ''")
+        if "transcript_timing" not in memory_cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN transcript_timing TEXT DEFAULT '[]'")
 
 
 def now_iso() -> str:
@@ -69,6 +73,12 @@ def now_iso() -> str:
 
 def row_to_memory(row: sqlite3.Row) -> dict[str, Any]:
     memory_id = row["id"]
+    raw_timing = row["transcript_timing"] if "transcript_timing" in row.keys() else "[]"
+    try:
+        transcript_timing = json.loads(raw_timing) if raw_timing else []
+    except json.JSONDecodeError:
+        transcript_timing = []
+
     return {
         "id": memory_id,
         "title": row["title"],
@@ -76,6 +86,7 @@ def row_to_memory(row: sqlite3.Row) -> dict[str, Any]:
         # Expose a stable API URL to clients; filesystem paths stay internal.
         "audio_path": f"/api/memories/{memory_id}/audio",
         "transcript": row["transcript"],
+        "transcript_timing": transcript_timing if isinstance(transcript_timing, list) else [],
         "story_short": row["story_short"],
         "story_long": row["story_long"],
         "cover_path": row["cover_path"],

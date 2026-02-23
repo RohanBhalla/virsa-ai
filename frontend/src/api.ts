@@ -1,4 +1,4 @@
-import type { Memory } from './types'
+import type { Memory, TranscriptWord } from './types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
 
@@ -24,8 +24,8 @@ export async function createMemory(file: Blob, title: string, speakerTag: string
   return fetchJson<{ id: string }>('/api/memories', { method: 'POST', body: fd })
 }
 
-export async function transcribeMemory(id: string): Promise<{ transcript: string }> {
-  return fetchJson<{ transcript: string }>(`/api/memories/${id}/transcribe`, {
+export async function transcribeMemory(id: string): Promise<{ transcript: string; transcript_timing: TranscriptWord[] }> {
+  return fetchJson<{ transcript: string; transcript_timing: TranscriptWord[] }>(`/api/memories/${id}/transcribe`, {
     method: 'POST',
   })
 }

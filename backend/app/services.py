@@ -9,10 +9,45 @@ import httpx
 from .config import COVER_DIR, ELEVENLABS_API_KEY, ELEVENLABS_MODEL_ID, ELEVENLABS_STT_URL
 
 
-async def transcribe_with_elevenlabs(audio_path: Path) -> tuple[str, bool, str]:
+def _as_float(value: object) -> float | None:
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_word_timing(payload: dict) -> list[dict[str, float | str]]:
+    raw_words = payload.get("words")
+    if not isinstance(raw_words, list):
+        return []
+
+    words: list[dict[str, float | str]] = []
+    for item in raw_words:
+        if not isinstance(item, dict):
+            continue
+
+        text = str(item.get("text") or item.get("word") or "").strip()
+        start = _as_float(item.get("start"))
+        end = _as_float(item.get("end"))
+
+        if not text or start is None or end is None:
+            continue
+
+        words.append({"text": text, "start": max(0.0, start), "end": max(start, end)})
+
+    words.sort(key=lambda w: float(w["start"]))
+    return words
+
+
+async def transcribe_with_elevenlabs(audio_path: Path) -> tuple[str, list[dict[str, float | str]], bool, str]:
     if not ELEVENLABS_API_KEY:
         return (
             "",
+            [],
             False,
             "ELEVENLABS_API_KEY is missing. Add it to enable real transcription.",
         )
@@ -22,12 +57,13 @@ async def transcribe_with_elevenlabs(audio_path: Path) -> tuple[str, bool, str]:
     async with httpx.AsyncClient(timeout=90) as client:
         with audio_path.open("rb") as audio_file:
             files = {"file": (audio_path.name, audio_file, "audio/webm")}
-            data = {"model_id": ELEVENLABS_MODEL_ID}
+            data = {"model_id": ELEVENLABS_MODEL_ID, "timestamps_granularity": "word"}
             response = await client.post(ELEVENLABS_STT_URL, headers=headers, files=files, data=data)
 
     if response.status_code >= 400:
         return (
             "",
+            [],
             False,
             f"ElevenLabs STT failed ({response.status_code}): {response.text[:240]}",
         )
@@ -35,9 +71,11 @@ async def transcribe_with_elevenlabs(audio_path: Path) -> tuple[str, bool, str]:
     payload = response.json()
     transcript = payload.get("text") or payload.get("transcript") or ""
     if not transcript.strip():
-        return "", False, "ElevenLabs returned an empty transcript."
+        return "", [], False, "ElevenLabs returned an empty transcript."
 
-    return transcript.strip(), True, "ok"
+    words = _extract_word_timing(payload)
+
+    return transcript.strip(), words, True, "ok"
 
 
 def fallback_story_from_transcript(transcript: str, context: str) -> tuple[str, str]:

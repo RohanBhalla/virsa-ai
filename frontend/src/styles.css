@@ -708,6 +708,56 @@ p {
   width: min(100%, 520px);
 }
 
+.lyrics-panel {
+  width: min(100%, 700px);
+  max-height: 280px;
+  overflow-y: auto;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 239, 231, 0.9));
+  border: 1px solid rgba(30, 28, 26, 0.1);
+  border-radius: 14px;
+  padding: 0.35rem;
+}
+
+.lyric-line {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #4b3e31;
+  text-align: left;
+  padding: 0.52rem 0.65rem;
+  display: grid;
+  grid-template-columns: 3rem 1fr;
+  gap: 0.5rem;
+  cursor: pointer;
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.lyric-line:hover {
+  background: rgba(121, 75, 25, 0.07);
+}
+
+.lyric-line-active {
+  background: rgba(121, 75, 25, 0.18);
+  color: #2f1707;
+  transform: scale(1.01);
+}
+
+.lyric-line-time {
+  font-variant-numeric: tabular-nums;
+  color: #7f6f61;
+  font-size: 0.82rem;
+}
+
+.detail-transcript-fallback {
+  color: #3d2f22;
+  line-height: 1.6;
+  background: #fff;
+  border: 1px solid rgba(30, 28, 26, 0.1);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+}
+
 .detail-back {
   width: fit-content;
 }
