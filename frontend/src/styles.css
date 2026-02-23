@@ -231,7 +231,8 @@ p {
 }
 
 .record-button::before,
-.record-pause-button::before {
+.record-pause-button::before,
+.record-save-button::before {
   content: "";
   position: absolute;
   inset: 2px;
@@ -243,7 +244,8 @@ p {
 }
 
 .record-button:hover,
-.record-pause-button:hover {
+.record-pause-button:hover,
+.record-save-button:hover {
   transform: translateY(-1px) scale(1.01);
   color: rgba(20, 15, 11, 0.92);
   box-shadow:
@@ -257,7 +259,8 @@ p {
 }
 
 .record-button:focus-visible,
-.record-pause-button:focus-visible {
+.record-pause-button:focus-visible,
+.record-save-button:focus-visible {
   outline: none;
   box-shadow:
     0 0 0 5px var(--ring),
@@ -320,6 +323,46 @@ p {
 .record-form-actions {
   display: flex;
   justify-content: center;
+}
+
+.record-save-button {
+  min-width: 72px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 999px;
+  padding: 0.74rem 1rem;
+  font-size: 0.94rem;
+  font-weight: 600;
+  color: #ffffff;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.12)),
+    linear-gradient(165deg, rgba(186, 114, 6, 0.78), rgba(161, 94, 0, 0.56) 55%, rgba(129, 73, 0, 0.58) 100%);
+  backdrop-filter: blur(18px) saturate(1.22);
+  -webkit-backdrop-filter: blur(18px) saturate(1.22);
+  box-shadow:
+    0 12px 24px rgba(24, 20, 14, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    inset 0 -8px 18px rgba(255, 255, 255, 0.1);
+  transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease, color 180ms ease;
+  animation: glassFloat 5.5s ease-in-out infinite;
+}
+
+.record-save-button:hover {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.16)),
+    linear-gradient(165deg, rgba(186, 114, 6, 0.84), rgba(169, 100, 0, 0.62) 55%, rgba(138, 80, 2, 0.64) 100%);
+}
+
+.record-save-button:active {
+  transform: scale(0.97);
+}
+
+.record-save-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  animation: none;
 }
 
 .record-pause-button {

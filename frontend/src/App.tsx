@@ -20,13 +20,32 @@ function navigate(path: string) {
   window.location.hash = path
 }
 
+function animateScrollByX(el: HTMLElement, distance: number, duration = 420) {
+  const start = el.scrollLeft
+  const target = start + distance
+  const startTime = performance.now()
+
+  const easeInOut = (t: number) =>
+    t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+
+  const tick = (now: number) => {
+    const elapsed = now - startTime
+    const progress = Math.min(1, elapsed / duration)
+    const eased = easeInOut(progress)
+    el.scrollLeft = start + (target - start) * eased
+    if (progress < 1) requestAnimationFrame(tick)
+  }
+
+  requestAnimationFrame(tick)
+}
+
 function CoverRail({ title, items }: { title: string; items: Memory[] }) {
   const railId = `rail-${title.toLowerCase().replace(/\s+/g, '-')}`
 
   function scrollNext() {
     const rail = document.getElementById(railId)
     if (!rail) return
-    rail.scrollBy({ left: rail.clientWidth * 0.8, behavior: 'smooth' })
+    animateScrollByX(rail, rail.clientWidth * 0.8)
   }
 
   return (
@@ -170,7 +189,7 @@ export default function App() {
   function scrollWallNext() {
     const rail = document.getElementById(wallId)
     if (!rail) return
-    rail.scrollBy({ left: rail.clientWidth * 0.9, behavior: 'smooth' })
+    animateScrollByX(rail, rail.clientWidth * 0.9)
   }
 
   async function saveRecordedMemory() {
@@ -272,7 +291,7 @@ export default function App() {
                   />
                 </div>
                 <div className="record-form-actions">
-                  <button type="button" className="btn btn-primary" disabled={!canSaveRecording} onClick={saveRecordedMemory}>
+                  <button type="button" className="record-save-button" disabled={!canSaveRecording} onClick={saveRecordedMemory}>
                     {isSavingRecord ? 'Saving...' : 'Save'}
                   </button>
                 </div>
