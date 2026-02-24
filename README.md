@@ -3,13 +3,13 @@
 Responsive web app to:
 - record voice memories,
 - transcribe with ElevenLabs,
-- index transcript chunks in a lightweight RAG store,
+- index transcript chunks in MongoDB Atlas vector search,
 - generate story text,
 - generate storybook-style cover cards.
 
 ## Project Structure
 
-- `backend/` FastAPI API + SQLite + local file storage
+- `backend/` FastAPI API + MongoDB Atlas + local/GridFS audio storage
 - `frontend/` React + Vite responsive UI
 
 ## Run Backend
@@ -24,6 +24,8 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Set `ELEVENLABS_API_KEY` in `.env` for real transcription.
+Set `MONGODB_URI` and create an Atlas vector index matching `MONGODB_VECTOR_INDEX` (default `memory_chunks_vector_index`) on `memory_chunks.embedding`.
+Set `JWT_SECRET_KEY` in `.env` before using auth endpoints.
 
 ## Run Frontend
 
@@ -48,3 +50,11 @@ Open `http://localhost:5173`.
 
 - Current story generation is a deterministic fallback to keep development unblocked.
 - Cover generation currently writes SVG cards locally. Swap this with an image model later for full AI image generation.
+
+## Auth Endpoints
+
+- `POST /api/auth/register` -> create account + return access/refresh tokens
+- `POST /api/auth/login` -> authenticate + return access/refresh tokens
+- `POST /api/auth/refresh` -> rotate refresh token + issue new tokens
+- `POST /api/auth/logout` -> revoke refresh session
+- `GET /api/auth/me` -> return current user (`Authorization: Bearer <access_token>`)

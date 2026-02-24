@@ -6,7 +6,14 @@ from pathlib import Path
 
 import httpx
 
-from .config import COVER_DIR, ELEVENLABS_API_KEY, ELEVENLABS_MODEL_ID, ELEVENLABS_STT_URL
+from .config import (
+    COVER_DIR,
+    ELEVENLABS_API_KEY,
+    ELEVENLABS_MODEL_ID,
+    ELEVENLABS_STT_URL,
+    SENTIMENT_API_KEY,
+    SENTIMENT_API_URL,
+)
 
 
 def _as_float(value: object) -> float | None:
@@ -128,3 +135,45 @@ def generate_cover_svg(memory_id: str, title: str, prompt: str) -> str:
     cover_path = COVER_DIR / f"{memory_id}.svg"
     cover_path.write_text(svg, encoding="utf-8")
     return str(cover_path)
+
+
+def _heuristic_mood_tag(text: str) -> str:
+    t = text.lower()
+    positive = ("love", "happy", "joy", "grateful", "celebrate", "laugh")
+    negative = ("sad", "loss", "cry", "hurt", "angry", "afraid")
+    p = sum(1 for w in positive if w in t)
+    n = sum(1 for w in negative if w in t)
+    if p > n:
+        return "positive"
+    if n > p:
+        return "somber"
+    return "reflective"
+
+
+def infer_mood_tag(transcript: str) -> str:
+    text = (transcript or "").strip()
+    if not text:
+        return "neutral"
+
+    if not SENTIMENT_API_URL:
+        return _heuristic_mood_tag(text)
+
+    headers = {"Content-Type": "application/json"}
+    if SENTIMENT_API_KEY:
+        headers["Authorization"] = f"Bearer {SENTIMENT_API_KEY}"
+
+    payload = {"text": text}
+
+    try:
+        with httpx.Client(timeout=20) as client:
+            res = client.post(SENTIMENT_API_URL, json=payload, headers=headers)
+        if res.status_code >= 400:
+            return _heuristic_mood_tag(text)
+        body = res.json()
+        mood = body.get("mood") or body.get("label") or body.get("sentiment")
+        if isinstance(mood, str) and mood.strip():
+            return mood.strip().lower()
+    except Exception:
+        return _heuristic_mood_tag(text)
+
+    return _heuristic_mood_tag(text)
