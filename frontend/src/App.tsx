@@ -2,6 +2,7 @@ import { type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useStat
 import {
   API_BASE,
   createMemory,
+  fetchProtectedBlob,
   generateCover,
   generateStory,
   getMe,
@@ -232,6 +233,7 @@ export default function App() {
   const [filter, setFilter] = useState<'all' | 'covers' | 'stories'>('all')
   const [searchExpanded, setSearchExpanded] = useState(false)
   const [playheadSeconds, setPlayheadSeconds] = useState(0)
+  const [audioSrc, setAudioSrc] = useState('')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const lyricLineRefs = useRef<Array<HTMLButtonElement | null>>([])
   const profileMenuRef = useRef<HTMLDivElement | null>(null)
@@ -418,6 +420,32 @@ export default function App() {
   }, [detailItem?.id])
 
   useEffect(() => {
+    let cancelled = false
+    let objectUrl = ''
+
+    const loadAudio = async () => {
+      if (!detailItem?.audio_path || route.view !== 'detail') {
+        setAudioSrc('')
+        return
+      }
+      try {
+        const blob = await fetchProtectedBlob(detailItem.audio_path)
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setAudioSrc(objectUrl)
+      } catch {
+        if (!cancelled) setAudioSrc('')
+      }
+    }
+
+    void loadAudio()
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [detailItem?.audio_path, route.view])
+
+  useEffect(() => {
     if (route.view !== 'detail' || activeLyricIndex < 0) return
     const el = lyricLineRefs.current[activeLyricIndex]
     if (!el) return
@@ -472,7 +500,7 @@ export default function App() {
 
     try {
       setRecordStatus('Saving recording...')
-      const created = await createMemory(recordedBlob, draftTitle.trim(), draftSpeaker.trim(), authUser?.id)
+      const created = await createMemory(recordedBlob, draftTitle.trim(), draftSpeaker.trim())
 
       setRecordStatus('Transcribing with ElevenLabs...')
       await transcribeMemory(created.id)
@@ -748,7 +776,7 @@ export default function App() {
                     className="detail-audio"
                     controls
                     preload="metadata"
-                    src={toAssetUrl(detailItem.audio_path)}
+                    src={audioSrc}
                     onTimeUpdate={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
                     onSeeked={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
                     onLoadedMetadata={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}

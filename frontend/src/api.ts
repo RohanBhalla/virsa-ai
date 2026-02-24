@@ -37,12 +37,11 @@ export async function listMemories(): Promise<Memory[]> {
   return data.items
 }
 
-export async function createMemory(file: Blob, title: string, speakerTag: string, userId?: string): Promise<{ id: string }> {
+export async function createMemory(file: Blob, title: string, speakerTag: string): Promise<{ id: string }> {
   const fd = new FormData()
   fd.append('audio', file, 'memory.webm')
   fd.append('title', title)
   fd.append('speaker_tag', speakerTag)
-  if (userId) fd.append('user_id', userId)
   return fetchJson<{ id: string }>('/api/memories', { method: 'POST', body: fd })
 }
 
@@ -110,6 +109,17 @@ export async function logout(refreshToken: string): Promise<{ status: string }> 
 export async function getMe(): Promise<User> {
   const data = await fetchJson<{ user: User }>('/api/auth/me')
   return data.user
+}
+
+export async function fetchProtectedBlob(path: string): Promise<Blob> {
+  const headers = new Headers()
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+  const res = await fetch(`${API_BASE}${path}`, { headers })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(parseApiError(text, res.status))
+  }
+  return res.blob()
 }
 
 export { API_BASE }

@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from bson import ObjectId
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -202,12 +202,23 @@ def _materialize_audio(memory: dict) -> Path | None:
         return None
 
 
+def _user_id(user: dict) -> str:
+    return str(user.get("id") or "")
+
+
+def _owned_memory_or_404(memory_id: str, user_id: str, projection: dict | None = None) -> dict:
+    row = memories_collection().find_one({"id": memory_id, "user_id": user_id}, projection or {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return row
+
+
 @app.post("/api/memories")
 async def create_memory(
     audio: UploadFile = File(...),
     title: str = Form(default="Untitled Memory"),
     speaker_tag: str = Form(default=""),
-    user_id: str | None = Form(default=None),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     if not audio.filename:
         raise HTTPException(status_code=400, detail="Audio filename missing")
@@ -238,7 +249,7 @@ async def create_memory(
     now = now_iso()
     clean_title = title.strip() or "Untitled Memory"
     clean_speaker_tag = speaker_tag.strip()
-    clean_user_id = (user_id or "").strip() or None
+    clean_user_id = _user_id(user)
 
     memories_collection().insert_one(
         {
@@ -265,7 +276,6 @@ async def create_memory(
                 "model": "",
                 "indexed_at": "",
             },
-            # Account provision: nullable until auth is wired.
             "user_id": clean_user_id,
             "created_at": now,
             "updated_at": now,
@@ -282,24 +292,20 @@ async def create_memory(
 
 
 @app.get("/api/memories")
-def list_memories() -> dict:
-    rows = list(memories_collection().find({}, {"_id": 0}).sort("created_at", -1))
+def list_memories(user: dict = Depends(get_current_user)) -> dict:
+    rows = list(memories_collection().find({"user_id": _user_id(user)}, {"_id": 0}).sort("created_at", -1))
     return {"items": [memory_to_response(row) for row in rows]}
 
 
 @app.get("/api/memories/{memory_id}")
-def get_memory(memory_id: str) -> dict:
-    row = memories_collection().find_one({"id": memory_id}, {"_id": 0})
-    if not row:
-        raise HTTPException(status_code=404, detail="Memory not found")
+def get_memory(memory_id: str, user: dict = Depends(get_current_user)) -> dict:
+    row = _owned_memory_or_404(memory_id, _user_id(user))
     return memory_to_response(row)
 
 
 @app.get("/api/memories/{memory_id}/audio")
-def get_memory_audio(memory_id: str):
-    row = memories_collection().find_one({"id": memory_id}, {"_id": 0})
-    if not row:
-        raise HTTPException(status_code=404, detail="Memory not found")
+def get_memory_audio(memory_id: str, user: dict = Depends(get_current_user)):
+    row = _owned_memory_or_404(memory_id, _user_id(user))
 
     audio_meta = row.get("audio") if isinstance(row.get("audio"), dict) else {}
     gridfs_id = audio_meta.get("gridfs_id") if isinstance(audio_meta, dict) else None
@@ -319,10 +325,8 @@ def get_memory_audio(memory_id: str):
 
 
 @app.post("/api/memories/{memory_id}/transcribe")
-async def transcribe_memory(memory_id: str) -> dict:
-    row = memories_collection().find_one({"id": memory_id}, {"_id": 0})
-    if not row:
-        raise HTTPException(status_code=404, detail="Memory not found")
+async def transcribe_memory(memory_id: str, user: dict = Depends(get_current_user)) -> dict:
+    row = _owned_memory_or_404(memory_id, _user_id(user))
 
     audio_path = _materialize_audio(row)
     if not audio_path:
@@ -336,7 +340,7 @@ async def transcribe_memory(memory_id: str) -> dict:
     mood_tag = infer_mood_tag(transcript)
 
     memories_collection().update_one(
-        {"id": memory_id},
+        {"id": memory_id, "user_id": _user_id(user)},
         {
             "$set": {
                 "transcript": transcript,
@@ -365,10 +369,12 @@ async def transcribe_memory(memory_id: str) -> dict:
 
 
 @app.post("/api/memories/{memory_id}/story")
-def build_story(memory_id: str, prompt: str = Form(default="Create a heartfelt family story.")) -> dict:
-    row = memories_collection().find_one({"id": memory_id}, {"_id": 0})
-    if not row:
-        raise HTTPException(status_code=404, detail="Memory not found")
+def build_story(
+    memory_id: str,
+    prompt: str = Form(default="Create a heartfelt family story."),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    row = _owned_memory_or_404(memory_id, _user_id(user))
 
     transcript = str(row.get("transcript") or "")
     if not transcript:
@@ -381,7 +387,7 @@ def build_story(memory_id: str, prompt: str = Form(default="Create a heartfelt f
     summary = short_story[:240]
 
     memories_collection().update_one(
-        {"id": memory_id},
+        {"id": memory_id, "user_id": _user_id(user)},
         {
             "$set": {
                 "story_short": short_story,
@@ -404,14 +410,16 @@ def build_story(memory_id: str, prompt: str = Form(default="Create a heartfelt f
 
 
 @app.post("/api/memories/{memory_id}/cover")
-def build_cover(memory_id: str, prompt: str = Form(default="Warm family storybook illustration")) -> dict:
-    row = memories_collection().find_one({"id": memory_id}, {"_id": 0, "title": 1})
-    if not row:
-        raise HTTPException(status_code=404, detail="Memory not found")
+def build_cover(
+    memory_id: str,
+    prompt: str = Form(default="Warm family storybook illustration"),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    row = _owned_memory_or_404(memory_id, _user_id(user), {"_id": 0, "title": 1})
 
     cover_path = generate_cover_svg(memory_id, str(row.get("title") or "Untitled"), prompt)
     memories_collection().update_one(
-        {"id": memory_id},
+        {"id": memory_id, "user_id": _user_id(user)},
         {"$set": {"cover_path": cover_path, "updated_at": now_iso()}},
     )
 
@@ -430,15 +438,13 @@ def _viewer_key(user_id: str | None, device_id: str | None) -> str:
 def save_playback_position(
     memory_id: str,
     position_seconds: float = Form(...),
-    user_id: str | None = Form(default=None),
-    device_id: str | None = Form(default="anonymous"),
+    user: dict = Depends(get_current_user),
 ) -> dict:
-    memory = memories_collection().find_one({"id": memory_id}, {"_id": 0, "id": 1})
-    if not memory:
-        raise HTTPException(status_code=404, detail="Memory not found")
+    user_id = _user_id(user)
+    _owned_memory_or_404(memory_id, user_id, {"_id": 0, "id": 1})
 
     safe_position = max(0.0, float(position_seconds))
-    key = _viewer_key(user_id, device_id)
+    key = _viewer_key(user_id, None)
     now = now_iso()
 
     playback_collection().update_one(
@@ -447,8 +453,8 @@ def save_playback_position(
             "$set": {
                 "memory_id": memory_id,
                 "viewer_key": key,
-                "user_id": (user_id or "").strip() or None,
-                "device_id": (device_id or "").strip() or None,
+                "user_id": user_id,
+                "device_id": None,
                 "position_seconds": safe_position,
                 "updated_at": now,
             },
@@ -460,8 +466,8 @@ def save_playback_position(
     return {
         "memory_id": memory_id,
         "position_seconds": safe_position,
-        "user_id": (user_id or "").strip() or None,
-        "device_id": (device_id or "").strip() or None,
+        "user_id": user_id,
+        "device_id": None,
         "updated_at": now,
     }
 
@@ -469,21 +475,19 @@ def save_playback_position(
 @app.get("/api/memories/{memory_id}/playback")
 def get_playback_position(
     memory_id: str,
-    user_id: str | None = Query(default=None),
-    device_id: str | None = Query(default="anonymous"),
+    user: dict = Depends(get_current_user),
 ) -> dict:
-    memory = memories_collection().find_one({"id": memory_id}, {"_id": 0, "id": 1})
-    if not memory:
-        raise HTTPException(status_code=404, detail="Memory not found")
+    user_id = _user_id(user)
+    _owned_memory_or_404(memory_id, user_id, {"_id": 0, "id": 1})
 
-    key = _viewer_key(user_id, device_id)
+    key = _viewer_key(user_id, None)
     row = playback_collection().find_one({"memory_id": memory_id, "viewer_key": key}, {"_id": 0})
     if not row:
         return {
             "memory_id": memory_id,
             "position_seconds": 0.0,
-            "user_id": (user_id or "").strip() or None,
-            "device_id": (device_id or "").strip() or None,
+            "user_id": user_id,
+            "device_id": None,
             "updated_at": "",
         }
 
@@ -513,6 +517,7 @@ def users_provision_hint() -> dict:
 
 
 @app.get("/api/admin/chunks/{memory_id}")
-def inspect_chunks(memory_id: str) -> dict:
+def inspect_chunks(memory_id: str, user: dict = Depends(get_current_user)) -> dict:
+    _owned_memory_or_404(memory_id, _user_id(user), {"_id": 0, "id": 1})
     rows = list(chunks_collection().find({"memory_id": memory_id}, {"_id": 0}).sort("idx", 1))
     return {"items": rows}
