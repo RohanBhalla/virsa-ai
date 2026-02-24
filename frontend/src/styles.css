@@ -14,6 +14,11 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   position: relative;
   isolation: isolate;
@@ -23,6 +28,7 @@ body {
   background: #f8f4ec;
   min-height: 100vh;
   overflow-x: hidden;
+  touch-action: manipulation;
 }
 
 body::before,
@@ -105,13 +111,11 @@ body::after {
 @keyframes viewEnter {
   0% {
     opacity: 0;
-    transform: translateY(10px) scale(0.99);
-    filter: blur(2px);
+    transform: translateY(10px);
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: blur(0);
+    transform: translateY(0);
   }
 }
 
@@ -155,6 +159,20 @@ h1 {
 
 .cover-rail-wrap {
   position: relative;
+  overflow: visible;
+  isolation: isolate;
+}
+
+.cover-rail-wrap::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 3rem;
+  background: linear-gradient(to left, rgba(248, 244, 236, 0.96), rgba(248, 244, 236, 0));
+  pointer-events: none;
+  z-index: 45;
 }
 
 .rail-title {
@@ -447,7 +465,7 @@ p {
   border: 1px solid rgba(30, 28, 26, 0.15);
   border-radius: var(--radius-md);
   padding: 0.72rem 0.88rem;
-  font-size: 0.97rem;
+  font-size: 16px;
   outline: none;
 }
 
@@ -498,15 +516,23 @@ p {
 }
 
 .cover-rail {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 42%;
   gap: 0.75rem;
   overflow-x: auto;
-  padding-bottom: 0.3rem;
-  scroll-snap-type: x mandatory;
+  padding: 0 0.05rem 0.3rem 0.05rem;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 0.05rem 0.05rem;
   scrollbar-width: none;
   -ms-overflow-style: none;
+}
+
+.cover-rail::after {
+  content: "";
+  width: 2.9rem;
 }
 
 .cover-rail::-webkit-scrollbar {
@@ -515,22 +541,24 @@ p {
 
 .rail-next {
   position: absolute;
-  right: 0.2rem;
+  right: 0.25rem;
   top: 50%;
   transform: translateY(-50%);
   width: 2.25rem;
   height: 2.25rem;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  background: rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(3px);
-  color: #ffffff;
+  border: 1px solid rgba(74, 33, 2, 0.28);
+  background: rgba(255, 247, 237, 0.88);
+  backdrop-filter: none;
+  color: #4a2102;
   font-size: 1.5rem;
   line-height: 1;
   cursor: pointer;
   display: grid;
   place-items: center;
   box-shadow: 0 4px 12px rgba(10, 10, 10, 0.18);
+  z-index: 80;
+  transform: translateY(-50%) translateZ(0);
 }
 
 .cover-card {
@@ -568,16 +596,24 @@ p {
 }
 
 .cover-wall {
+  position: relative;
+  z-index: 1;
   margin-top: 0.8rem;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 24%;
   gap: 0.6rem;
   overflow-x: auto;
-  scroll-snap-type: x mandatory;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 0 0;
   scrollbar-width: none;
   -ms-overflow-style: none;
-  padding-bottom: 0.35rem;
+  padding: 0 0 0.35rem 0;
+}
+
+.cover-wall::after {
+  content: "";
+  width: 2.9rem;
 }
 
 .cover-wall::-webkit-scrollbar {
@@ -586,6 +622,20 @@ p {
 
 .cover-wall-wrap {
   position: relative;
+  overflow: visible;
+  isolation: isolate;
+}
+
+.cover-wall-wrap::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 3rem;
+  background: linear-gradient(to left, rgba(248, 244, 236, 0.96), rgba(248, 244, 236, 0));
+  pointer-events: none;
+  z-index: 45;
 }
 
 .cover-wall-item {
@@ -609,7 +659,9 @@ p {
 }
 
 .rail-next-wall {
-  right: 0;
+  right: 0.25rem;
+  z-index: 80;
+  transform: translateY(-50%) translateZ(0);
 }
 
 .actions {
