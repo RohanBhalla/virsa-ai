@@ -416,15 +416,7 @@ h1 {
 }
 
 .cover-rail-wrap::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 3rem;
-  background: linear-gradient(to left, rgba(248, 244, 236, 0.96), rgba(248, 244, 236, 0));
-  pointer-events: none;
-  z-index: 45;
+  content: none;
 }
 
 .rail-title {
