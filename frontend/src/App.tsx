@@ -16,6 +16,7 @@ import {
   transcribeMemory,
 } from './api'
 import { Recorder } from './components/Recorder'
+import virasatLogo from './assets/virasat-logo.png'
 import type { Memory, TranscriptWord, User } from './types'
 
 type View = 'home' | 'record' | 'detail' | 'account'
@@ -623,10 +624,15 @@ export default function App() {
   }
 
   return (
-    <main className="page app-shell">
-      <header className="hero">
-        <div className="hero-row">
-          <h1>Virasat.ai</h1>
+      <main className="page app-shell">
+        <header className="hero">
+          <div className="hero-row">
+	          <button type="button" className="hero-brand hero-home-btn" onClick={() => navigate('/')}>
+	            {/* <span className="hero-logo-circle">
+	              <img src={virasatLogo} alt="Virasat logo" className="hero-logo-image" />
+	            </span> */}
+	            <h1>Virasat.ai</h1>
+	          </button>
           <div className="profile-menu-wrap" ref={profileMenuRef}>
             <button
               type="button"
@@ -639,6 +645,10 @@ export default function App() {
             </button>
             {profileMenuOpen ? (
               <div className="profile-menu-card" role="menu" aria-label="Account menu">
+                <div className="profile-menu-greeting">
+                  <span>Hello,</span>
+                  <strong>{authUser.name || authUser.email}</strong>
+                </div>
                 <button
                   type="button"
                   className="profile-menu-item"
