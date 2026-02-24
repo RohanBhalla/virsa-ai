@@ -1,14 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { API_BASE, createMemory, generateCover, generateStory, listMemories, toAssetUrl, transcribeMemory } from './api'
+import { type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  API_BASE,
+  createMemory,
+  generateCover,
+  generateStory,
+  getMe,
+  listMemories,
+  login,
+  logout,
+  refreshAuth,
+  register,
+  setAccessToken,
+  toAssetUrl,
+  transcribeMemory,
+} from './api'
 import { Recorder } from './components/Recorder'
-import type { Memory, TranscriptWord } from './types'
+import type { Memory, TranscriptWord, User } from './types'
 
-type View = 'home' | 'record' | 'detail'
+type View = 'home' | 'record' | 'detail' | 'account'
+type AuthMode = 'login' | 'signup'
+
+const ACCESS_TOKEN_KEY = 'virsa_access_token'
+const REFRESH_TOKEN_KEY = 'virsa_refresh_token'
 
 function parseHash(): { view: View; id?: string } {
   const hash = window.location.hash.replace(/^#/, '')
   if (!hash || hash === '/') return { view: 'home' }
   if (hash === '/record') return { view: 'record' }
+  if (hash === '/account') return { view: 'account' }
   if (hash.startsWith('/recordings/')) {
     const id = hash.split('/')[2]
     if (id) return { view: 'detail', id }
@@ -131,6 +150,31 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+function hashSeed(input: string): number {
+  let hash = 0
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash << 5) - hash + input.charCodeAt(i)
+    hash |= 0
+  }
+  return Math.abs(hash)
+}
+
+function userInitials(user: User | null): string {
+  if (!user) return 'U'
+  const seed = (user.name || user.email || '').trim()
+  if (!seed) return 'U'
+
+  const parts = seed
+    .replace(/[@._-]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+  }
+  return parts[0].slice(0, 2).toUpperCase()
+}
+
 function CoverRail({ title, items }: { title: string; items: Memory[] }) {
   const railId = `rail-${title.toLowerCase().replace(/\s+/g, '-')}`
 
@@ -166,6 +210,16 @@ function CoverRail({ title, items }: { title: string; items: Memory[] }) {
 
 export default function App() {
   const [route, setRoute] = useState(parseHash())
+  const [authMode, setAuthMode] = useState<AuthMode>('login')
+  const [authUser, setAuthUser] = useState<User | null>(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const [authName, setAuthName] = useState('')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [refreshToken, setRefreshToken] = useState('')
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [memories, setMemories] = useState<Memory[]>([])
   const [loading, setLoading] = useState(true)
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
@@ -180,6 +234,22 @@ export default function App() {
   const [playheadSeconds, setPlayheadSeconds] = useState(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const lyricLineRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const profileMenuRef = useRef<HTMLDivElement | null>(null)
+
+  function persistAuth(accessToken: string, nextRefreshToken: string) {
+    localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+    localStorage.setItem(REFRESH_TOKEN_KEY, nextRefreshToken)
+    setRefreshToken(nextRefreshToken)
+    setAccessToken(accessToken)
+  }
+
+  function clearAuth() {
+    localStorage.removeItem(ACCESS_TOKEN_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
+    setAccessToken('')
+    setRefreshToken('')
+    setAuthUser(null)
+  }
 
   async function loadMemories() {
     setLoading(true)
@@ -194,8 +264,44 @@ export default function App() {
   }
 
   useEffect(() => {
-    void loadMemories()
+    const bootstrapAuth = async () => {
+      const storedAccess = localStorage.getItem(ACCESS_TOKEN_KEY) || ''
+      const storedRefresh = localStorage.getItem(REFRESH_TOKEN_KEY) || ''
+      if (!storedAccess || !storedRefresh) {
+        setAuthReady(true)
+        return
+      }
+
+      try {
+        setAccessToken(storedAccess)
+        setRefreshToken(storedRefresh)
+        const me = await getMe()
+        setAuthUser(me)
+      } catch {
+        try {
+          const rotated = await refreshAuth(storedRefresh)
+          persistAuth(rotated.access_token, rotated.refresh_token)
+          const me = await getMe()
+          setAuthUser(me)
+        } catch {
+          clearAuth()
+        }
+      } finally {
+        setAuthReady(true)
+      }
+    }
+
+    void bootstrapAuth()
   }, [])
+
+  useEffect(() => {
+    if (!authUser) {
+      setMemories([])
+      setLoading(false)
+      return
+    }
+    void loadMemories()
+  }, [authUser])
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash())
@@ -206,6 +312,22 @@ export default function App() {
   useEffect(() => {
     if (route.view !== 'home' && searchExpanded) setSearchExpanded(false)
   }, [route.view, searchExpanded])
+
+  useEffect(() => {
+    setProfileMenuOpen(false)
+  }, [route.view])
+
+  useEffect(() => {
+    if (!profileMenuOpen) return
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (profileMenuRef.current && !profileMenuRef.current.contains(target)) {
+        setProfileMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [profileMenuOpen])
 
   useEffect(() => {
     const animated = new WeakSet<Element>()
@@ -281,6 +403,13 @@ export default function App() {
   const detailItem = route.view === 'detail' ? memories.find((m) => m.id === route.id) : undefined
   const lyricLines = useMemo(() => buildLyricLines(detailItem?.transcript_timing || []), [detailItem?.transcript_timing])
   const activeLyricIndex = useMemo(() => findActiveLineIndex(lyricLines, playheadSeconds), [lyricLines, playheadSeconds])
+  const profileInitials = useMemo(() => userInitials(authUser), [authUser])
+  const profileAvatarStyle = useMemo(() => {
+    const palette = ['#9d5f13', '#8f3c24', '#7a4c9f', '#2c6f86', '#7a2f56', '#5e6a2f']
+    const key = `${authUser?.id || ''}:${profileInitials}`
+    const bg = palette[hashSeed(key) % palette.length]
+    return { '--avatar-bg': bg } as CSSProperties
+  }, [authUser?.id, profileInitials])
   const wallId = 'cover-wall-strip'
 
   useEffect(() => {
@@ -301,6 +430,40 @@ export default function App() {
     animateScrollByX(rail, rail.clientWidth * 0.9)
   }
 
+  async function submitAuthForm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setAuthLoading(true)
+    setAuthError('')
+
+    try {
+      const cleanEmail = authEmail.trim().toLowerCase()
+      const cleanPassword = authPassword
+      const cleanName = authName.trim()
+
+      const result =
+        authMode === 'signup'
+          ? await register(cleanEmail, cleanPassword, cleanName)
+          : await login(cleanEmail, cleanPassword)
+
+      persistAuth(result.access_token, result.refresh_token)
+      setAuthUser(result.user)
+      setAuthPassword('')
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Authentication failed')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      if (refreshToken) await logout(refreshToken)
+    } catch {
+      // Ignore network errors while clearing local session.
+    }
+    clearAuth()
+  }
+
   async function saveRecordedMemory() {
     if (!recordedBlob || !draftTitle.trim() || !draftSpeaker.trim()) return
 
@@ -309,7 +472,7 @@ export default function App() {
 
     try {
       setRecordStatus('Saving recording...')
-      const created = await createMemory(recordedBlob, draftTitle.trim(), draftSpeaker.trim())
+      const created = await createMemory(recordedBlob, draftTitle.trim(), draftSpeaker.trim(), authUser?.id)
 
       setRecordStatus('Transcribing with ElevenLabs...')
       await transcribeMemory(created.id)
@@ -342,10 +505,136 @@ export default function App() {
     })
   }
 
+  if (!authReady) {
+    return (
+      <main className="page auth-page">
+        <section className="auth-card panel">
+          <p className="meta">Checking session...</p>
+        </section>
+      </main>
+    )
+  }
+
+  if (!authUser) {
+    const isSignup = authMode === 'signup'
+    const canSubmit =
+      !!authEmail.trim() &&
+      authPassword.length >= 10 &&
+      (!isSignup || !!authName.trim()) &&
+      !authLoading
+
+    return (
+      <main className="page auth-page">
+        <header className="auth-topbar">
+          <div className="auth-brand">V</div>
+          <div className="auth-toggle-pill" role="tablist" aria-label="Auth mode">
+            <button
+              type="button"
+              className={authMode === 'signup' ? 'active' : ''}
+              onClick={() => {
+                setAuthMode('signup')
+                setAuthError('')
+              }}
+            >
+              Sign up
+            </button>
+            <button
+              type="button"
+              className={authMode === 'login' ? 'active' : ''}
+              onClick={() => {
+                setAuthMode('login')
+                setAuthError('')
+              }}
+            >
+              Log in
+            </button>
+          </div>
+        </header>
+
+        <section className="auth-card panel">
+          <h1 className="auth-title">{isSignup ? 'Sign up to begin' : 'Welcome back'}</h1>
+          <p className="auth-subtitle">Preserve family stories with secure account access.</p>
+
+          <form className="auth-form" onSubmit={submitAuthForm}>
+            {isSignup ? (
+              <input
+                type="text"
+                className="title-input auth-input"
+                placeholder="Full name"
+                value={authName}
+                onChange={(e) => setAuthName(e.target.value)}
+                autoComplete="name"
+              />
+            ) : null}
+            <input
+              type="email"
+              className="title-input auth-input"
+              placeholder="Email"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              autoComplete="email"
+            />
+            <input
+              type="password"
+              className="title-input auth-input"
+              placeholder="Password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              autoComplete={isSignup ? 'new-password' : 'current-password'}
+            />
+            <button type="submit" className="auth-submit" disabled={!canSubmit}>
+              {authLoading ? 'Please wait...' : isSignup ? 'Create account' : 'Log in'}
+            </button>
+          </form>
+
+          <p className="meta auth-note">Password must be at least 10 characters.</p>
+          {authError ? <p className="error-text">{authError}</p> : null}
+        </section>
+      </main>
+    )
+  }
+
   return (
     <main className="page app-shell">
       <header className="hero">
-        <h1>Virasat.ai</h1>
+        <div className="hero-row">
+          <h1>Virasat.ai</h1>
+          <div className="profile-menu-wrap" ref={profileMenuRef}>
+            <button
+              type="button"
+              className="profile-avatar-btn"
+              aria-label="Open account menu"
+              onClick={() => setProfileMenuOpen((prev) => !prev)}
+              style={profileAvatarStyle}
+            >
+              {profileInitials}
+            </button>
+            {profileMenuOpen ? (
+              <div className="profile-menu-card" role="menu" aria-label="Account menu">
+                <button
+                  type="button"
+                  className="profile-menu-item"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    navigate('/account')
+                  }}
+                >
+                  Account
+                </button>
+                <button
+                  type="button"
+                  className="profile-menu-item danger"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    void handleLogout()
+                  }}
+                >
+                  Logout
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
       </header>
 
       {route.view === 'home' ? (
@@ -498,6 +787,25 @@ export default function App() {
               <p className="meta">Recording not found.</p>
             )}
             <button className="btn btn-primary detail-back" onClick={() => navigate('/')}>Back Home</button>
+          </section>
+        </div>
+      ) : null}
+
+      {route.view === 'account' ? (
+        <div className="view-shell">
+          <section className="panel account-panel">
+            <h2>Account</h2>
+            <div className="account-row">
+              <span>Name</span>
+              <strong>{authUser.name || 'Not set'}</strong>
+            </div>
+            <div className="account-row">
+              <span>Email</span>
+              <strong>{authUser.email}</strong>
+            </div>
+            <button type="button" className="record-save-button account-logout-btn" onClick={() => void handleLogout()}>
+              Logout
+            </button>
           </section>
         </div>
       ) : null}

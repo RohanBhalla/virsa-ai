@@ -17,3 +17,20 @@ export type Memory = {
   created_at: string
   updated_at: string
 }
+
+export type User = {
+  id: string
+  email: string
+  name: string
+  created_at: string
+  updated_at: string
+}
+
+export type AuthResponse = {
+  user: User
+  access_token: string
+  refresh_token: string
+  token_type: string
+  access_token_expires_in: number
+  refresh_token_expires_in: number
+}
