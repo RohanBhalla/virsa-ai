@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import subprocess
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Iterable
+
+logger = logging.getLogger(__name__)
 
 import httpx
 from pymongo.errors import OperationFailure
@@ -26,7 +29,7 @@ from .config import (
     VERTEX_LOCATION,
     VERTEX_PROJECT_ID,
 )
-from .db import chunks_collection
+from .db import chunks_collection, memories_collection
 
 
 def chunk_text(text: str, max_words: int = 80) -> list[str]:
@@ -213,7 +216,7 @@ def embedding_model_name() -> str:
     return f"local-hash-{EMBEDDING_DIM}"
 
 
-def index_transcript(memory_id: str, transcript: str) -> tuple[int, str]:
+def index_transcript(memory_id: str, transcript: str, user_id: str) -> tuple[int, str]:
     chunks = chunk_text(transcript)
     vectors = embed_texts(chunks)
 
@@ -226,6 +229,7 @@ def index_transcript(memory_id: str, transcript: str) -> tuple[int, str]:
         docs.append(
             {
                 "memory_id": memory_id,
+                "user_id": user_id,
                 "idx": idx,
                 "content": chunk,
                 "embedding": vectors[idx],
@@ -239,6 +243,106 @@ def index_transcript(memory_id: str, transcript: str) -> tuple[int, str]:
         col.insert_many(docs)
 
     return len(chunks), embedding_model_name()
+
+
+def search_stories(user_id: str, query: str, top_k: int = 10) -> list[tuple[str, float, str]]:
+    """Vector search across the current user's memories. Returns list of (memory_id, score, content_snippet)."""
+    if not query.strip():
+        return []
+
+    query_vector = embed_texts([query])[0]
+    col = chunks_collection()
+    # Fetch enough chunks so that after filtering by user_id we still have plenty to dedupe
+    vector_limit = 300
+    num_candidates = max(500, vector_limit * 2)
+
+    # Atlas index may not have user_id/memory_id as filter fields. Run vector search without
+    # filter, then $match by user_id so we don't require index changes.
+    pipeline = [
+        {
+            "$vectorSearch": {
+                "index": MONGODB_VECTOR_INDEX,
+                "path": "embedding",
+                "queryVector": query_vector,
+                "numCandidates": num_candidates,
+                "limit": vector_limit,
+            }
+        },
+        {"$match": {"user_id": user_id}},
+        {"$project": {"_id": 0, "memory_id": 1, "content": 1, "score": {"$meta": "vectorSearchScore"}}},
+    ]
+
+    rows: list[dict] = []
+    path_used = "vector_search_post_filter"
+
+    try:
+        rows = list(col.aggregate(pipeline))
+    except OperationFailure as e:
+        logger.warning("search_stories: vector search (post-filter) failed: %s", e)
+        path_used = "fallback_find_one"
+        memory_ids = [
+            m["id"]
+            for m in memories_collection().find({"user_id": user_id}, {"id": 1})
+            if m.get("id")
+        ]
+        rows = []
+        for mid in memory_ids[:top_k]:
+            chunk_row = col.find_one({"memory_id": mid}, {"_id": 0, "memory_id": 1, "content": 1})
+            if chunk_row:
+                rows.append({**chunk_row, "score": 0.0})
+
+    def _score_from_item(item: dict) -> float:
+        raw = item.get("score")
+        if raw is None:
+            return 0.0
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        # Atlas can return Decimal128 or other numeric types
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+        if hasattr(raw, "to_decimal"):
+            return float(raw.to_decimal())
+        return 0.0
+
+    # Deduplicate by memory_id, keep best score per memory
+    seen: dict[str, tuple[float, str]] = {}
+    for item in rows:
+        mid = item.get("memory_id")
+        content = item.get("content") or ""
+        score = _score_from_item(item)
+        if not mid:
+            continue
+        if mid not in seen or score > seen[mid][0]:
+            seen[mid] = (score, content)
+
+    result = [(mid, sc, snippet) for mid, (sc, snippet) in seen.items()]
+    result.sort(key=lambda x: -x[1])
+    result = result[:top_k]
+
+    logger.info(
+        "search_stories: user_id=%s query=%r path=%s hits=%d",
+        user_id,
+        query[:80] + ("..." if len(query) > 80 else ""),
+        path_used,
+        len(result),
+    )
+    if rows and path_used != "fallback_find_one" and all(_score_from_item(r) == 0.0 for r in rows[:5]):
+        # Debug: log raw keys/score from first row when all scores are 0
+        first = rows[0]
+        logger.info("search_stories: debug first row keys=%s score_raw=%s", list(first.keys()), first.get("score"))
+    for rank, (mid, score, snippet) in enumerate(result, start=1):
+        preview = (snippet[:60] + "...") if len(snippet) > 60 else snippet
+        logger.info(
+            "  [%d] memory_id=%s score=%.4f snippet=%r",
+            rank,
+            mid,
+            score,
+            preview,
+        )
+
+    return result
 
 
 def retrieve(memory_id: str, query: str, top_k: int = 4) -> list[str]:

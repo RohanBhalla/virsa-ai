@@ -11,6 +11,8 @@ import {
   logout,
   refreshAuth,
   register,
+  searchStories,
+  searchStoriesWithAudio,
   setAccessToken,
   toAssetUrl,
   transcribeMemory,
@@ -233,6 +235,14 @@ export default function App() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'covers' | 'stories'>('all')
   const [searchExpanded, setSearchExpanded] = useState(false)
+  const [searchApiResults, setSearchApiResults] = useState<Memory[] | null>(null)
+  const [lastSearchQuery, setLastSearchQuery] = useState('')
+  const [searchFromVoice, setSearchFromVoice] = useState(false)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  const [voiceRecording, setVoiceRecording] = useState(false)
+  const voiceRecorderRef = useRef<MediaRecorder | null>(null)
+  const voiceChunksRef = useRef<Blob[]>([])
   const [playheadSeconds, setPlayheadSeconds] = useState(0)
   const [audioSrc, setAudioSrc] = useState('')
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -317,6 +327,75 @@ export default function App() {
   }, [route.view, searchExpanded])
 
   useEffect(() => {
+    if (!search.trim()) {
+      setSearchApiResults(null)
+      setLastSearchQuery('')
+      setSearchFromVoice(false)
+    }
+  }, [search])
+
+  async function runTextSearch() {
+    const q = search.trim()
+    if (!q) return
+    setSearchLoading(true)
+    setSearchError('')
+    try {
+      const data = await searchStories(q)
+      setSearchApiResults(data.items)
+      setLastSearchQuery(data.query)
+      setSearchFromVoice(false)
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : 'Search failed')
+      setSearchApiResults([])
+      setLastSearchQuery(q)
+    } finally {
+      setSearchLoading(false)
+    }
+  }
+
+  async function startVoiceSearch() {
+    if (voiceRecording) {
+      const mr = voiceRecorderRef.current
+      if (mr && mr.state !== 'inactive') {
+        mr.stop()
+      }
+      return
+    }
+    voiceChunksRef.current = []
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream)
+      voiceRecorderRef.current = recorder
+      recorder.ondataavailable = (e) => {
+        if (e.data.size) voiceChunksRef.current.push(e.data)
+      }
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop())
+        setVoiceRecording(false)
+        if (voiceChunksRef.current.length === 0) return
+        const blob = new Blob(voiceChunksRef.current, { type: 'audio/webm' })
+        setSearchLoading(true)
+        setSearchError('')
+        try {
+          const data = await searchStoriesWithAudio(blob)
+          setSearch(data.query)
+          setSearchApiResults(data.items)
+          setLastSearchQuery(data.query)
+          setSearchFromVoice(true)
+        } catch (err) {
+          setSearchError(err instanceof Error ? err.message : 'Voice search failed')
+        } finally {
+          setSearchLoading(false)
+        }
+      }
+      recorder.start()
+      setVoiceRecording(true)
+    } catch {
+      setSearchError('Microphone access denied')
+    }
+  }
+
+  useEffect(() => {
     setProfileMenuOpen(false)
   }, [route.view])
 
@@ -391,6 +470,17 @@ export default function App() {
       return item.title.toLowerCase().includes(q) || item.story_short.toLowerCase().includes(q)
     })
   }, [memories, search, filter])
+
+  const displaySearchResults = useMemo(() => {
+    if (searchApiResults !== null && lastSearchQuery) {
+      return searchApiResults.filter((item) => {
+        if (filter === 'covers' && !item.cover_path) return false
+        if (filter === 'stories' && !item.story_short) return false
+        return true
+      })
+    }
+    return searchResults
+  }, [searchApiResults, lastSearchQuery, filter, searchResults])
 
   const recommended = useMemo(
     () => memories.filter((m) => m.cover_path && m.story_short).slice(0, 8),
@@ -873,33 +963,47 @@ export default function App() {
 
       {searchExpanded && route.view === 'home' ? (
         <section className="search-island panel">
+          {searchFromVoice && lastSearchQuery ? (
+            <p className="search-query-meta meta">You said: &ldquo;{lastSearchQuery}&rdquo;</p>
+          ) : null}
           <div className="search-results spring-scroll">
-            {searchResults.length === 0 ? <p className="meta">No search results.</p> : null}
-            {searchResults.map((item) => (
-              <button
-                key={item.id}
-                className="search-result-item"
-                onClick={() => {
-                  setSearchExpanded(false)
-                  navigate(`/recordings/${item.id}`)
-                }}
-              >
-                {item.cover_path ? (
-                  <img src={toAssetUrl(`/covers/${item.id}.svg`)} alt={item.title} className="search-result-cover" />
-                ) : (
-                  <div className="search-result-cover placeholder">No cover</div>
-                )}
-                <div>
-                  <strong>{item.title}</strong>
-                  <p className="meta">{item.story_short || 'No story summary yet.'}</p>
-                </div>
-              </button>
-            ))}
+            {searchLoading ? <p className="meta">Searching...</p> : null}
+            {searchError ? <p className="error-text">{searchError}</p> : null}
+            {!searchLoading && !searchError && displaySearchResults.length === 0 ? (
+              <p className="meta">No search results.</p>
+            ) : null}
+            {!searchLoading &&
+              displaySearchResults.map((item) => (
+                <button
+                  key={item.id}
+                  className="search-result-item"
+                  onClick={() => {
+                    setSearchExpanded(false)
+                    navigate(`/recordings/${item.id}`)
+                  }}
+                >
+                  {item.cover_path ? (
+                    <img src={toAssetUrl(`/covers/${item.id}.svg`)} alt={item.title} className="search-result-cover" />
+                  ) : (
+                    <div className="search-result-cover placeholder">No cover</div>
+                  )}
+                  <div>
+                    <strong>{item.title}</strong>
+                    <p className="meta">{item.story_short || 'No story summary yet.'}</p>
+                  </div>
+                </button>
+              ))}
           </div>
           <div className="actions search-filters">
-            <button className={`chip ${filter === 'all' ? 'chip-active' : ''}`} onClick={() => setFilter('all')}>All</button>
-            <button className={`chip ${filter === 'covers' ? 'chip-active' : ''}`} onClick={() => setFilter('covers')}>Has Cover</button>
-            <button className={`chip ${filter === 'stories' ? 'chip-active' : ''}`} onClick={() => setFilter('stories')}>Has Story</button>
+            <button className={`chip ${filter === 'all' ? 'chip-active' : ''}`} onClick={() => setFilter('all')}>
+              All
+            </button>
+            <button className={`chip ${filter === 'covers' ? 'chip-active' : ''}`} onClick={() => setFilter('covers')}>
+              Has Cover
+            </button>
+            <button className={`chip ${filter === 'stories' ? 'chip-active' : ''}`} onClick={() => setFilter('stories')}>
+              Has Story
+            </button>
           </div>
           <div className="search-wrap search-bottom">
             <input
@@ -908,8 +1012,31 @@ export default function App() {
               className="title-input"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by title or story"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void runTextSearch()
+                }
+              }}
+              placeholder="Search by title or story (or use voice)"
             />
+            <button
+              type="button"
+              className={`voice-search-btn ${voiceRecording ? 'recording' : ''}`}
+              onClick={() => void startVoiceSearch()}
+              aria-label={voiceRecording ? 'Stop recording' : 'Voice search'}
+              title={voiceRecording ? 'Stop recording' : 'Search by voice'}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" className="voice-icon">
+                <path
+                  fill="currentColor"
+                  d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.35s5.42-2.35 5.91-5.35c.1-.6-.39-1.14-1-1.14z"
+                />
+              </svg>
+            </button>
+            <button type="button" className="search-submit-btn" onClick={() => void runTextSearch()} disabled={searchLoading || !search.trim()}>
+              Search
+            </button>
           </div>
         </section>
       ) : null}

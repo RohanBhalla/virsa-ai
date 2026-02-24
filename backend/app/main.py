@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import io
+import logging
 import shutil
+import tempfile
 from pathlib import Path
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 from bson import ObjectId
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -34,7 +38,7 @@ from .db import (
     users_collection,
     get_db,
 )
-from .rag import index_transcript, join_context, retrieve
+from .rag import index_transcript, join_context, retrieve, search_stories
 from .services import (
     fallback_story_from_transcript,
     generate_cover_svg,
@@ -55,6 +59,14 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    # Ensure app loggers (e.g. search) emit at INFO to the console
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(logging.INFO)
+    if not app_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+        app_logger.addHandler(handler)
     init_db()
 
 
@@ -297,6 +309,89 @@ def list_memories(user: dict = Depends(get_current_user)) -> dict:
     return {"items": [memory_to_response(row) for row in rows]}
 
 
+async def _search_request_body(request: Request) -> tuple[str, UploadFile | None]:
+    """Parse search request: either JSON { query } or multipart with query and/or audio."""
+    content_type = (request.headers.get("content-type") or "").lower()
+    search_query = ""
+    audio_file: UploadFile | None = None
+
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            search_query = (body.get("query") or "").strip()
+        except Exception:
+            pass
+        return search_query, None
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        search_query = (form.get("query") or "").strip()
+        if isinstance(form.get("audio"), UploadFile):
+            audio_file = form.get("audio")
+        return search_query, audio_file
+
+    return "", None
+
+
+@app.post("/api/search")
+async def search_memories(
+    request: Request,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    search_query, audio_file = await _search_request_body(request)
+
+    if audio_file and audio_file.filename:
+        suffix = Path(audio_file.filename or "audio").suffix or ".webm"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            shutil.copyfileobj(audio_file.file, tmp)
+            tmp_path = Path(tmp.name)
+        try:
+            transcript, _, ok, _ = await transcribe_with_elevenlabs(tmp_path)
+            if ok and (transcript or "").strip():
+                search_query = transcript.strip()
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    if not search_query:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a text query or an audio recording to search.",
+        )
+
+    user_id = _user_id(user)
+    hits = search_stories(user_id, search_query, top_k=15)
+    memory_ids = [mid for mid, _, _ in hits]
+    scores_by_id = {mid: score for mid, score, _ in hits}
+
+    if not memory_ids:
+        logger.info("search_memories: user_id=%s query=%r no hits", user_id, search_query[:80])
+        return {"query": search_query, "items": []}
+
+    rows = list(
+        memories_collection().find(
+            {"id": {"$in": memory_ids}, "user_id": user_id},
+            {"_id": 0},
+        )
+    )
+    by_id = {r["id"]: r for r in rows}
+    # Return items in best-match order (same order as hits, already sorted by score)
+    ordered = [memory_to_response(by_id[mid]) for mid in memory_ids if mid in by_id]
+
+    logger.info(
+        "search_memories: user_id=%s query=%r returning %d stories (best-match order)",
+        user_id,
+        search_query[:80] + ("..." if len(search_query) > 80 else ""),
+        len(ordered),
+    )
+    for rank, mem_id in enumerate(memory_ids, start=1):
+        if mem_id in by_id:
+            title = by_id[mem_id].get("title") or "(no title)"
+            score = scores_by_id.get(mem_id, 0)
+            logger.info("  [%d] id=%s title=%r score=%.4f", rank, mem_id, title, score)
+
+    return {"query": search_query, "items": ordered}
+
+
 @app.get("/api/memories/{memory_id}")
 def get_memory(memory_id: str, user: dict = Depends(get_current_user)) -> dict:
     row = _owned_memory_or_404(memory_id, _user_id(user))
@@ -336,7 +431,7 @@ async def transcribe_memory(memory_id: str, user: dict = Depends(get_current_use
     if not ok:
         raise HTTPException(status_code=502, detail=message)
 
-    chunk_count, embedding_model = index_transcript(memory_id, transcript)
+    chunk_count, embedding_model = index_transcript(memory_id, transcript, _user_id(user))
     mood_tag = infer_mood_tag(transcript)
 
     memories_collection().update_one(
@@ -514,6 +609,21 @@ def users_provision_hint() -> dict:
         ],
         "linking_strategy": "memories.user_id and playback_positions.user_id",
     }
+
+
+@app.post("/api/admin/backfill-chunk-user-ids")
+def backfill_chunk_user_ids(user: dict = Depends(get_current_user)) -> dict:
+    """One-time backfill: set user_id on chunks that lack it, using memories.user_id."""
+    mems = {m["id"]: m.get("user_id") for m in memories_collection().find({}, {"id": 1, "user_id": 1}) if m.get("id")}
+    col = chunks_collection()
+    memory_ids = col.distinct("memory_id", {"user_id": {"$exists": False}})
+    updated = 0
+    for mid in memory_ids:
+        uid = mems.get(mid)
+        if uid:
+            result = col.update_many({"memory_id": mid, "user_id": {"$exists": False}}, {"$set": {"user_id": uid}})
+            updated += result.modified_count
+    return {"updated": updated}
 
 
 @app.get("/api/admin/chunks/{memory_id}")

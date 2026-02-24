@@ -122,4 +122,23 @@ export async function fetchProtectedBlob(path: string): Promise<Blob> {
   return res.blob()
 }
 
+export type SearchResponse = { query: string; items: Memory[] }
+
+export async function searchStories(query: string): Promise<SearchResponse> {
+  return fetchJson<SearchResponse>('/api/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  })
+}
+
+export async function searchStoriesWithAudio(audioBlob: Blob): Promise<SearchResponse> {
+  const fd = new FormData()
+  fd.append('audio', audioBlob, 'search.webm')
+  return fetchJson<SearchResponse>('/api/search', {
+    method: 'POST',
+    body: fd,
+  })
+}
+
 export { API_BASE }

@@ -61,6 +61,7 @@ def init_db() -> None:
 
     chunks_collection().create_index([("memory_id", ASCENDING), ("idx", ASCENDING)], unique=True)
     chunks_collection().create_index([("memory_id", ASCENDING)])
+    chunks_collection().create_index([("user_id", ASCENDING)], sparse=True)
 
     # One playback position per (memory + viewer key). Viewer key can map to a
     # future account user_id or current anonymous device_id.
