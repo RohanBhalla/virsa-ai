@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import ForceGraph2D from 'react-force-graph-2d'
+import ForceGraph2D, { type ForceGraphMethods, type LinkObject, type NodeObject } from 'react-force-graph-2d'
 import { getMemoryGraph, getRelatedMemories, toAssetUrl } from '../api'
 import type { Memory, MemoryGraph } from '../types'
 
@@ -36,6 +36,7 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
   const [related, setRelated] = useState<{ memory: Memory; score: number }[]>([])
   const [trail, setTrail] = useState<string[]>([])
   const graphWrapRef = useRef<HTMLDivElement>(null)
+  const fgRef = useRef<ForceGraphMethods<NodeObject<MemoryNode>, LinkObject<MemoryNode, GraphLink>> | undefined>(undefined)
   const [graphSize, setGraphSize] = useState({ width: 600, height: 400 })
 
   useEffect(() => {
@@ -92,6 +93,51 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
     }))
     return { nodes, links }
   }, [graph])
+
+  const themeClusterPositions = useMemo(() => {
+    const nodes = graphData.nodes
+    if (nodes.length === 0) return new Map<string, { x: number; y: number }>()
+    const themeSet = new Set<string>()
+    nodes.forEach((n) => (n.themes ?? []).forEach((t) => themeSet.add(t)))
+    const themeList = Array.from(themeSet).sort()
+    const positions = new Map<string, { x: number; y: number }>()
+    const R = 160
+    themeList.forEach((t, i) => {
+      const angle = (2 * Math.PI * i) / Math.max(1, themeList.length)
+      positions.set(t, { x: R * Math.cos(angle), y: R * Math.sin(angle) })
+    })
+    positions.set('_other', { x: 0, y: 0 })
+    return positions
+  }, [graphData.nodes])
+
+  useEffect(() => {
+    const fg = fgRef.current
+    if (!fg || graphData.nodes.length === 0) return
+    const positions = themeClusterPositions
+    const getTarget = (node: MemoryNode) =>
+      positions.get((node.themes ?? [])[0] ?? '_other') ?? { x: 0, y: 0 }
+    let nodes: MemoryNode[] = []
+    const strength = 0.22
+    function forceCluster(alpha: number) {
+      for (const node of nodes) {
+        const t = getTarget(node)
+        const n = node as MemoryNode & { x?: number; y?: number; vx?: number; vy?: number }
+        const x = n.x ?? 0
+        const y = n.y ?? 0
+        n.vx = (n.vx ?? 0) + (t.x - x) * strength * alpha
+        n.vy = (n.vy ?? 0) + (t.y - y) * strength * alpha
+      }
+    }
+    forceCluster.initialize = (n: unknown[]) => {
+      nodes = n as MemoryNode[]
+    }
+    type ForceFn = ((alpha: number) => void) & { initialize?: (nodes: unknown[]) => void }
+    fg.d3Force('themeCluster', forceCluster as ForceFn)
+    fg.d3ReheatSimulation?.()
+    return () => {
+      fg.d3Force('themeCluster', null as unknown as ForceFn)
+    }
+  }, [graphData, themeClusterPositions])
 
   const handleNodeClick = useCallback(
     (node: MemoryNode) => {
@@ -227,6 +273,7 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
       </div>
       <div className="memory-map-graph-wrap" ref={graphWrapRef}>
         <ForceGraph2D
+          ref={fgRef}
           graphData={graphData}
           nodeId="id"
           nodeLabel={(n) => (n as MemoryNode).title ?? n.id}
