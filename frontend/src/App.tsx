@@ -60,23 +60,24 @@ function formatMemoryTag(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-function animateScrollByX(el: HTMLElement, distance: number, duration = 420) {
-  const start = el.scrollLeft
-  const target = start + distance
-  const startTime = performance.now()
+function animateScrollByX(el: HTMLElement, distance: number) {
+  const maxLeft = Math.max(0, el.scrollWidth - el.clientWidth)
+  const target = Math.min(maxLeft, Math.max(0, el.scrollLeft + distance))
+  el.scrollTo({ left: target, behavior: 'smooth' })
+}
 
-  const easeInOut = (t: number) =>
-    t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
-
-  const tick = (now: number) => {
-    const elapsed = now - startTime
-    const progress = Math.min(1, elapsed / duration)
-    const eased = easeInOut(progress)
-    el.scrollLeft = start + (target - start) * eased
-    if (progress < 1) requestAnimationFrame(tick)
-  }
-
-  requestAnimationFrame(tick)
+function animateRailButtonPress(el: HTMLElement, direction: 'left' | 'right') {
+  const shift = direction === 'right' ? 5 : -5
+  const base = 'translateY(-50%) translateZ(0)'
+  const frames = [
+    { transform: `${base} scale(1)` },
+    { transform: `translateY(-50%) translateX(${shift}px) translateZ(0) scale(0.92)` },
+    { transform: `${base} scale(1)` },
+  ]
+  el.animate(frames, {
+    duration: 220,
+    easing: 'cubic-bezier(0.22, 0.9, 0.22, 1)',
+  })
 }
 
 type LyricLine = {
@@ -198,10 +199,34 @@ function userInitials(user: User | null): string {
 
 function CoverRail({ title, items }: { title: string; items: Memory[] }) {
   const railId = `rail-${title.toLowerCase().replace(/\s+/g, '-')}`
+  const railRef = useRef<HTMLDivElement>(null)
+  const [showPrev, setShowPrev] = useState(false)
 
-  function scrollNext() {
-    const rail = document.getElementById(railId)
+  useEffect(() => {
+    const rail = railRef.current
     if (!rail) return
+
+    const updatePrev = () => setShowPrev(rail.scrollLeft > 6)
+    updatePrev()
+    rail.addEventListener('scroll', updatePrev, { passive: true })
+    window.addEventListener('resize', updatePrev)
+    return () => {
+      rail.removeEventListener('scroll', updatePrev)
+      window.removeEventListener('resize', updatePrev)
+    }
+  }, [items.length])
+
+  function scrollPrev(button: HTMLButtonElement) {
+    const rail = railRef.current
+    if (!rail) return
+    animateRailButtonPress(button, 'left')
+    animateScrollByX(rail, -rail.clientWidth * 0.8)
+  }
+
+  function scrollNext(button: HTMLButtonElement) {
+    const rail = railRef.current
+    if (!rail) return
+    animateRailButtonPress(button, 'right')
     animateScrollByX(rail, rail.clientWidth * 0.8)
   }
 
@@ -209,7 +234,7 @@ function CoverRail({ title, items }: { title: string; items: Memory[] }) {
     <section className="rail-section">
       <h2 className="rail-title">{title}</h2>
       <div className="cover-rail-wrap">
-        <div id={railId} className="cover-rail spring-scroll">
+        <div id={railId} ref={railRef} className="cover-rail spring-scroll" data-bounce-axis="y">
           {items.map((item) => (
             <button key={item.id} className="cover-card" onClick={() => navigate(`/recordings/${item.id}`)}>
               {item.cover_path ? (
@@ -221,7 +246,17 @@ function CoverRail({ title, items }: { title: string; items: Memory[] }) {
             </button>
           ))}
         </div>
-        <button type="button" className="rail-next" onClick={scrollNext} aria-label={`Scroll ${title}`}>
+        {showPrev ? (
+          <button
+            type="button"
+            className="rail-next rail-prev"
+            onClick={(e) => scrollPrev(e.currentTarget)}
+            aria-label={`Scroll ${title} left`}
+          >
+            &#8249;
+          </button>
+        ) : null}
+        <button type="button" className="rail-next" onClick={(e) => scrollNext(e.currentTarget)} aria-label={`Scroll ${title}`}>
           &#8250;
         </button>
       </div>
@@ -579,7 +614,11 @@ export default function App() {
       const hasX = target.scrollWidth > target.clientWidth + 2
       const hasY = target.scrollHeight > target.clientHeight + 2
 
-      if (hasX) {
+      const bounceAxis = target.dataset.bounceAxis || 'xy'
+      const allowXBounce = bounceAxis.includes('x')
+      const allowYBounce = bounceAxis.includes('y')
+
+      if (hasX && allowXBounce) {
         const delta = Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY
         const atStart = target.scrollLeft <= 1
         const atEnd = target.scrollLeft + target.clientWidth >= target.scrollWidth - 1
@@ -587,7 +626,7 @@ export default function App() {
         if (delta > 0 && atEnd) triggerBounce(target, 'x', -1)
       }
 
-      if (hasY) {
+      if (hasY && allowYBounce) {
         const atTop = target.scrollTop <= 1
         const atBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - 1
         if (ev.deltaY < 0 && atTop) triggerBounce(target, 'y', 1)
@@ -655,6 +694,8 @@ export default function App() {
       ? 'Transcribing audio'
       : 'Tap to speak your search'
   const wallId = 'cover-wall-strip'
+  const wallRailRef = useRef<HTMLDivElement>(null)
+  const [showWallPrev, setShowWallPrev] = useState(false)
 
   const generationBuckets = useMemo(() => {
     if (!familyTree) return []
@@ -766,11 +807,34 @@ export default function App() {
     el.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [activeLyricIndex, route.view])
 
-  function scrollWallNext() {
-    const rail = document.getElementById(wallId)
+  function scrollWallNext(button: HTMLButtonElement) {
+    const rail = wallRailRef.current
     if (!rail) return
+    animateRailButtonPress(button, 'right')
     animateScrollByX(rail, rail.clientWidth * 0.9)
   }
+
+  function scrollWallPrev(button: HTMLButtonElement) {
+    const rail = wallRailRef.current
+    if (!rail) return
+    animateRailButtonPress(button, 'left')
+    animateScrollByX(rail, -rail.clientWidth * 0.9)
+  }
+
+  useEffect(() => {
+    if (route.view !== 'home') return
+    const rail = wallRailRef.current
+    if (!rail) return
+
+    const updatePrev = () => setShowWallPrev(rail.scrollLeft > 6)
+    updatePrev()
+    rail.addEventListener('scroll', updatePrev, { passive: true })
+    window.addEventListener('resize', updatePrev)
+    return () => {
+      rail.removeEventListener('scroll', updatePrev)
+      window.removeEventListener('resize', updatePrev)
+    }
+  }, [route.view, memories.length])
 
   function openElderSetupModal() {
     setElderSetupError('')
@@ -1304,7 +1368,7 @@ export default function App() {
             {loading ? <p className="meta">Loading memories...</p> : null}
             {!loading && memories.length === 0 ? <p className="meta">No stories yet.</p> : null}
             <div className="cover-wall-wrap">
-              <div id={wallId} className="cover-wall spring-scroll">
+              <div id={wallId} ref={wallRailRef} className="cover-wall spring-scroll" data-bounce-axis="y">
                 {memories.map((item) => (
                   <button key={item.id} className="cover-wall-item" onClick={() => navigate(`/recordings/${item.id}`)}>
                     {item.cover_path ? (
@@ -1316,7 +1380,22 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <button type="button" className="rail-next rail-next-wall" onClick={scrollWallNext} aria-label="Scroll cover wall">
+              {showWallPrev ? (
+                <button
+                  type="button"
+                  className="rail-next rail-prev rail-prev-wall"
+                  onClick={(e) => scrollWallPrev(e.currentTarget)}
+                  aria-label="Scroll cover wall left"
+                >
+                  &#8249;
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="rail-next rail-next-wall"
+                onClick={(e) => scrollWallNext(e.currentTarget)}
+                aria-label="Scroll cover wall"
+              >
                 &#8250;
               </button>
             </div>

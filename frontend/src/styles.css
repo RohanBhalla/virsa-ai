@@ -972,6 +972,11 @@ p {
   transform: translateY(-50%) translateZ(0);
 }
 
+.rail-prev {
+  right: auto;
+  left: 0.25rem;
+}
+
 .cover-card {
   background: transparent;
   border: 0;
@@ -1044,7 +1049,7 @@ p {
   top: 0;
   bottom: 0;
   width: 3rem;
-  background: linear-gradient(to left, rgba(248, 244, 236, 0.96), rgba(248, 244, 236, 0));
+  background: transparent;
   pointer-events: none;
   z-index: 45;
 }
@@ -1071,6 +1076,12 @@ p {
 
 .rail-next-wall {
   right: 0.25rem;
+  z-index: 80;
+  transform: translateY(-50%) translateZ(0);
+}
+
+.rail-prev-wall {
+  left: 0.25rem;
   z-index: 80;
   transform: translateY(-50%) translateZ(0);
 }
