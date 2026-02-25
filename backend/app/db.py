@@ -95,6 +95,7 @@ def memory_to_response(memory: dict[str, Any]) -> dict[str, Any]:
     transcript_timing = _safe_list(memory.get("transcript_timing"))
     mood_tag = _safe_str(memory.get("mood_tag"))
     ai_summary = _safe_str(memory.get("ai_summary"))
+    ai_summary_status = _safe_str(memory.get("ai_summary_status"))
 
     # Keep existing response fields stable for frontend compatibility.
     return {
@@ -105,11 +106,12 @@ def memory_to_response(memory: dict[str, Any]) -> dict[str, Any]:
         "audio_url": f"/api/memories/{memory_id}/audio",
         "transcript": _safe_str(memory.get("transcript")),
         "transcript_timing": transcript_timing,
-        "story_short": _safe_str(memory.get("story_short")),
-        "story_long": _safe_str(memory.get("story_long")),
+        "story_children": _safe_str(memory.get("story_children")),
+        "story_narration": _safe_str(memory.get("story_narration")),
         "cover_path": _safe_str(memory.get("cover_path")),
         "mood_tag": mood_tag,
         "ai_summary": ai_summary,
+        "ai_summary_status": ai_summary_status,
         "embedding_status": memory.get("embedding_status") or {
             "indexed": False,
             "chunk_count": 0,

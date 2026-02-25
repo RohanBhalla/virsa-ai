@@ -19,9 +19,6 @@ from .config import (
     GEMINI_EMBEDDING_BASE_URL,
     GEMINI_EMBEDDING_MODEL,
     MONGODB_VECTOR_INDEX,
-    OPENAI_API_KEY,
-    OPENAI_EMBEDDING_MODEL,
-    OPENAI_EMBEDDING_URL,
     VERTEX_ACCESS_TOKEN,
     VERTEX_API_KEY,
     VERTEX_EMBEDDING_BASE_URL,
@@ -53,33 +50,6 @@ def _hash_embedding(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
     if norm == 0:
         return vec
     return [v / norm for v in vec]
-
-
-def _openai_embeddings(texts: list[str]) -> list[list[float]]:
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": OPENAI_EMBEDDING_MODEL,
-        "input": texts,
-    }
-
-    with httpx.Client(timeout=45) as client:
-        res = client.post(OPENAI_EMBEDDING_URL, json=payload, headers=headers)
-    res.raise_for_status()
-    body = res.json()
-    data = body.get("data")
-    if not isinstance(data, list):
-        raise RuntimeError("Invalid embedding response")
-
-    vectors: list[list[float]] = []
-    for item in data:
-        emb = item.get("embedding") if isinstance(item, dict) else None
-        if not isinstance(emb, list):
-            raise RuntimeError("Missing embedding vector in response")
-        vectors.append([float(x) for x in emb])
-    return vectors
 
 
 def _gemini_embeddings(texts: list[str]) -> list[list[float]]:
@@ -192,16 +162,6 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
                 return [_hash_embedding(text) for text in texts]
         return [_hash_embedding(text) for text in texts]
 
-    if provider == "openai":
-        if OPENAI_API_KEY:
-            try:
-                return _openai_embeddings(texts)
-            except Exception:
-                return [_hash_embedding(text) for text in texts]
-        return [_hash_embedding(text) for text in texts]
-
-    if OPENAI_API_KEY:
-        return _openai_embeddings(texts)
     return [_hash_embedding(text) for text in texts]
 
 
@@ -211,8 +171,6 @@ def embedding_model_name() -> str:
         return VERTEX_EMBEDDING_MODEL
     if provider == "gemini" and GEMINI_API_KEY:
         return GEMINI_EMBEDDING_MODEL
-    if provider == "openai" and OPENAI_API_KEY:
-        return OPENAI_EMBEDDING_MODEL
     return f"local-hash-{EMBEDDING_DIM}"
 
 

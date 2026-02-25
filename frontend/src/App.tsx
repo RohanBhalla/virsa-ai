@@ -237,10 +237,10 @@ export default function App() {
   const [searchExpanded, setSearchExpanded] = useState(false)
   const [searchApiResults, setSearchApiResults] = useState<Memory[] | null>(null)
   const [lastSearchQuery, setLastSearchQuery] = useState('')
-  const [searchFromVoice, setSearchFromVoice] = useState(false)
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [voiceRecording, setVoiceRecording] = useState(false)
+  const [voiceProcessing, setVoiceProcessing] = useState(false)
   const voiceRecorderRef = useRef<MediaRecorder | null>(null)
   const voiceChunksRef = useRef<Blob[]>([])
   const [playheadSeconds, setPlayheadSeconds] = useState(0)
@@ -330,7 +330,6 @@ export default function App() {
     if (!search.trim()) {
       setSearchApiResults(null)
       setLastSearchQuery('')
-      setSearchFromVoice(false)
     }
   }, [search])
 
@@ -338,12 +337,13 @@ export default function App() {
     const q = search.trim()
     if (!q) return
     setSearchLoading(true)
+    setVoiceProcessing(false)
     setSearchError('')
     try {
       const data = await searchStories(q)
+      setSearch(data.query)
       setSearchApiResults(data.items)
       setLastSearchQuery(data.query)
-      setSearchFromVoice(false)
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : 'Search failed')
       setSearchApiResults([])
@@ -372,8 +372,12 @@ export default function App() {
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop())
         setVoiceRecording(false)
-        if (voiceChunksRef.current.length === 0) return
+        if (voiceChunksRef.current.length === 0) {
+          setVoiceProcessing(false)
+          return
+        }
         const blob = new Blob(voiceChunksRef.current, { type: 'audio/webm' })
+        setVoiceProcessing(true)
         setSearchLoading(true)
         setSearchError('')
         try {
@@ -381,17 +385,27 @@ export default function App() {
           setSearch(data.query)
           setSearchApiResults(data.items)
           setLastSearchQuery(data.query)
-          setSearchFromVoice(true)
         } catch (err) {
           setSearchError(err instanceof Error ? err.message : 'Voice search failed')
         } finally {
+          setVoiceProcessing(false)
           setSearchLoading(false)
         }
       }
       recorder.start()
       setVoiceRecording(true)
-    } catch {
-      setSearchError('Microphone access denied')
+    } catch (err) {
+      setVoiceProcessing(false)
+      const domErr = err as DOMException | null
+      if (domErr?.name === 'NotAllowedError') {
+        setSearchError('Microphone access denied')
+      } else if (domErr?.name === 'NotFoundError') {
+        setSearchError('No microphone device found')
+      } else if (domErr?.name === 'NotSupportedError') {
+        setSearchError('Voice search is not supported in this browser')
+      } else {
+        setSearchError('Unable to start voice recording')
+      }
     }
   }
 
@@ -465,9 +479,9 @@ export default function App() {
     const q = search.trim().toLowerCase()
     return memories.filter((item) => {
       if (filter === 'covers' && !item.cover_path) return false
-      if (filter === 'stories' && !item.story_short) return false
+      if (filter === 'stories' && !item.ai_summary) return false
       if (!q) return true
-      return item.title.toLowerCase().includes(q) || item.story_short.toLowerCase().includes(q)
+      return item.title.toLowerCase().includes(q) || item.ai_summary.toLowerCase().includes(q)
     })
   }, [memories, search, filter])
 
@@ -475,7 +489,7 @@ export default function App() {
     if (searchApiResults !== null && lastSearchQuery) {
       return searchApiResults.filter((item) => {
         if (filter === 'covers' && !item.cover_path) return false
-        if (filter === 'stories' && !item.story_short) return false
+        if (filter === 'stories' && !item.ai_summary) return false
         return true
       })
     }
@@ -483,7 +497,7 @@ export default function App() {
   }, [searchApiResults, lastSearchQuery, filter, searchResults])
 
   const recommended = useMemo(
-    () => memories.filter((m) => m.cover_path && m.story_short).slice(0, 8),
+    () => memories.filter((m) => m.cover_path && m.ai_summary).slice(0, 8),
     [memories],
   )
 
@@ -503,6 +517,12 @@ export default function App() {
     const bg = palette[hashSeed(key) % palette.length]
     return { '--avatar-bg': bg } as CSSProperties
   }, [authUser?.id, profileInitials])
+  const voiceButtonLabel = voiceRecording ? 'Stop' : voiceProcessing ? 'Listening...' : 'Voice'
+  const voiceButtonHint = voiceRecording
+    ? 'Tap to stop recording'
+    : voiceProcessing
+      ? 'Transcribing audio'
+      : 'Tap to speak your search'
   const wallId = 'cover-wall-strip'
 
   useEffect(() => {
@@ -596,7 +616,7 @@ export default function App() {
       setRecordStatus('Transcribing with ElevenLabs...')
       await transcribeMemory(created.id)
 
-      setRecordStatus('Building story with RAG context...')
+      setRecordStatus('Building story variants with AI agent...')
       await generateStory(created.id, 'Create a warm family storybook chapter based on this memory.')
 
       setRecordStatus('Designing story cover...')
@@ -863,9 +883,23 @@ export default function App() {
                 </section>
 
                 <section className="detail-block">
-                  <h3>AI Story Summary</h3>
+                  <h3>Book-Style AI Summary</h3>
                   <p className="detail-summary">
-                    {detailItem.story_short || detailItem.story_long || 'AI summary not generated yet.'}
+                    {detailItem.ai_summary || 'AI summary not generated yet.'}
+                  </p>
+                </section>
+
+                <section className="detail-block">
+                  <h3>Children's Version</h3>
+                  <p className="detail-summary">
+                    {detailItem.story_children || 'Children version not generated yet.'}
+                  </p>
+                </section>
+
+                <section className="detail-block">
+                  <h3>Documentary Narration</h3>
+                  <p className="detail-summary">
+                    {detailItem.story_narration || 'Narration version not generated yet.'}
                   </p>
                 </section>
 
@@ -963,9 +997,6 @@ export default function App() {
 
       {searchExpanded && route.view === 'home' ? (
         <section className="search-island panel">
-          {searchFromVoice && lastSearchQuery ? (
-            <p className="search-query-meta meta">You said: &ldquo;{lastSearchQuery}&rdquo;</p>
-          ) : null}
           <div className="search-results spring-scroll">
             {searchLoading ? <p className="meta">Searching...</p> : null}
             {searchError ? <p className="error-text">{searchError}</p> : null}
@@ -989,7 +1020,7 @@ export default function App() {
                   )}
                   <div>
                     <strong>{item.title}</strong>
-                    <p className="meta">{item.story_short || 'No story summary yet.'}</p>
+                    <p className="meta">{item.ai_summary || 'No story summary yet.'}</p>
                   </div>
                 </button>
               ))}
@@ -1022,10 +1053,11 @@ export default function App() {
             />
             <button
               type="button"
-              className={`voice-search-btn ${voiceRecording ? 'recording' : ''}`}
+              className={`voice-search-btn ${voiceRecording ? 'recording' : ''} ${voiceProcessing ? 'processing' : ''}`}
               onClick={() => void startVoiceSearch()}
+              disabled={voiceProcessing}
               aria-label={voiceRecording ? 'Stop recording' : 'Voice search'}
-              title={voiceRecording ? 'Stop recording' : 'Search by voice'}
+              title={voiceButtonHint}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true" className="voice-icon">
                 <path
@@ -1033,6 +1065,7 @@ export default function App() {
                   d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.35s5.42-2.35 5.91-5.35c.1-.6-.39-1.14-1-1.14z"
                 />
               </svg>
+              <span className="voice-search-label">{voiceButtonLabel}</span>
             </button>
             <button type="button" className="search-submit-btn" onClick={() => void runTextSearch()} disabled={searchLoading || !search.trim()}>
               Search

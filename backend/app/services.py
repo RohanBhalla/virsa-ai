@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import textwrap
 from pathlib import Path
 
@@ -13,7 +15,15 @@ from .config import (
     ELEVENLABS_STT_URL,
     SENTIMENT_API_KEY,
     SENTIMENT_API_URL,
+    VERTEX_ACCESS_TOKEN,
+    VERTEX_API_KEY,
+    VERTEX_GENERATIVE_BASE_URL,
+    VERTEX_LOCATION,
+    VERTEX_PROJECT_ID,
+    VERTEX_STORY_MODEL,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _as_float(value: object) -> float | None:
@@ -50,7 +60,11 @@ def _extract_word_timing(payload: dict) -> list[dict[str, float | str]]:
     return words
 
 
-async def transcribe_with_elevenlabs(audio_path: Path) -> tuple[str, list[dict[str, float | str]], bool, str]:
+async def transcribe_with_elevenlabs(
+    audio_path: Path,
+    *,
+    language_code: str | None = None,
+) -> tuple[str, list[dict[str, float | str]], bool, str]:
     if not ELEVENLABS_API_KEY:
         return (
             "",
@@ -65,6 +79,9 @@ async def transcribe_with_elevenlabs(audio_path: Path) -> tuple[str, list[dict[s
         with audio_path.open("rb") as audio_file:
             files = {"file": (audio_path.name, audio_file, "audio/webm")}
             data = {"model_id": ELEVENLABS_MODEL_ID, "timestamps_granularity": "word"}
+            clean_language = (language_code or "").strip().lower()
+            if clean_language and clean_language != "auto":
+                data["language_code"] = clean_language
             response = await client.post(ELEVENLABS_STT_URL, headers=headers, files=files, data=data)
 
     if response.status_code >= 400:
@@ -85,25 +102,159 @@ async def transcribe_with_elevenlabs(audio_path: Path) -> tuple[str, list[dict[s
     return transcript.strip(), words, True, "ok"
 
 
-def fallback_story_from_transcript(transcript: str, context: str) -> tuple[str, str]:
-    seed = transcript.strip() or "A precious family memory was recorded, and this story preserves it."
-    preview = textwrap.shorten(seed, width=240, placeholder="...")
+def _clean_generated_text(value: object, max_chars: int = 6000) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.strip().split())[:max_chars]
 
-    short_story = (
-        "A memory worth keeping: "
-        + preview
-    )
 
-    long_story = (
-        "Chapter 1: The Voice\n"
-        f"{preview}\n\n"
-        "Chapter 2: What This Means\n"
-        "This memory reflects a family moment with emotional depth and living history. "
-        "The narrative can be enriched over time as more memories are captured.\n\n"
-        "Context Notes\n"
-        f"{textwrap.shorten(context or seed, width=500, placeholder='...')}"
+def _fallback_story_variants(
+    transcript: str,
+    context: str,
+    title: str,
+    speaker_tag: str,
+) -> dict[str, str]:
+    subject = (speaker_tag or title or "this person").strip() or "this person"
+    summary_seed = textwrap.shorten(transcript, width=220, placeholder="...")
+    context_seed = textwrap.shorten(context or transcript, width=360, placeholder="...")
+
+    return {
+        "ai_summary": (
+            f"Meet {subject}: {summary_seed} "
+            "This heartfelt memory follows their journey, choices, and the meaning they carry forward."
+        )[:480],
+        "story_children": (
+            f"{subject} has an important story to share. {summary_seed} "
+            "In this version, we tell the memory with gentle words, clear moments, and a warm ending for young listeners."
+        )[:1400],
+        "story_narration": (
+            "Documentary narration: "
+            f"In this recorded account, {subject} reflects on a defining family moment. "
+            f"{summary_seed} "
+            f"Supporting context: {context_seed}"
+        )[:2200],
+    }
+
+
+def _normalize_story_variants(
+    payload: dict[str, object],
+    transcript: str,
+    context: str,
+    title: str,
+    speaker_tag: str,
+) -> dict[str, str]:
+    fallback = _fallback_story_variants(transcript, context, title, speaker_tag)
+    out = dict(fallback)
+
+    key_aliases: dict[str, tuple[str, ...]] = {
+        "ai_summary": ("ai_summary", "book_blurb", "back_cover_blurb"),
+        "story_children": ("story_children", "children_version", "kids_version"),
+        "story_narration": ("story_narration", "narration", "documentary_narration"),
+    }
+
+    for target_key, aliases in key_aliases.items():
+        for source_key in aliases:
+            cleaned = _clean_generated_text(payload.get(source_key))
+            if cleaned:
+                out[target_key] = cleaned
+                break
+    return out
+
+
+def _vertex_story_variants(
+    transcript: str,
+    context: str,
+    prompt: str,
+    title: str,
+    speaker_tag: str,
+) -> dict[str, str] | None:
+    if not VERTEX_PROJECT_ID:
+        return None
+    if not VERTEX_API_KEY and not VERTEX_ACCESS_TOKEN:
+        return None
+
+    endpoint = VERTEX_GENERATIVE_BASE_URL.rstrip("/") if VERTEX_GENERATIVE_BASE_URL else f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com"
+    model = VERTEX_STORY_MODEL
+    if model.startswith("publishers/google/models/"):
+        model_path = model
+    else:
+        model_path = f"publishers/google/models/{model}"
+    url = f"{endpoint}/v1/projects/{VERTEX_PROJECT_ID}/locations/{VERTEX_LOCATION}/{model_path}:generateContent"
+
+    headers = {"Content-Type": "application/json"}
+    params: dict[str, str] = {}
+    if VERTEX_API_KEY:
+        params["key"] = VERTEX_API_KEY
+        headers["x-goog-api-key"] = VERTEX_API_KEY
+    if VERTEX_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {VERTEX_ACCESS_TOKEN}"
+
+    transcript_seed = textwrap.shorten(transcript, width=3600, placeholder="...")
+    context_seed = textwrap.shorten(context or transcript, width=2200, placeholder="...")
+    request_prompt = textwrap.shorten(prompt, width=500, placeholder="...")
+
+    system_prompt = (
+        "You are a memory-storytelling agent. Return strict JSON with keys: "
+        "ai_summary, story_children, story_narration. "
+        "Requirements: ai_summary is a book-jacket style blurb focused on the main character and their action. "
+        "story_children is not a summary; it is a child-friendly retelling with simple language. "
+        "story_narration is documentary-style narration."
     )
-    return short_story, long_story
+    user_prompt = (
+        f"Title: {title or 'Untitled Memory'}\n"
+        f"Speaker: {speaker_tag or 'Unknown'}\n"
+        f"Story request: {request_prompt}\n\n"
+        f"Transcript:\n{transcript_seed}\n\n"
+        f"Retrieved context:\n{context_seed}"
+    )
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": 0.8,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    with httpx.Client(timeout=60) as client:
+        response = client.post(url, params=params or None, headers=headers, json=payload)
+    response.raise_for_status()
+
+    body = response.json()
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+
+    first = candidates[0]
+    content = first.get("content") if isinstance(first, dict) else None
+    parts = content.get("parts") if isinstance(content, dict) else None
+    if not isinstance(parts, list) or not parts:
+        return None
+    text = parts[0].get("text") if isinstance(parts[0], dict) else None
+    if not isinstance(text, str):
+        return None
+
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        return None
+    return _normalize_story_variants(parsed, transcript, context, title, speaker_tag)
+
+
+def generate_story_variants(
+    transcript: str,
+    context: str,
+    prompt: str,
+    title: str,
+    speaker_tag: str,
+) -> tuple[dict[str, str], str]:
+    try:
+        generated = _vertex_story_variants(transcript, context, prompt, title, speaker_tag)
+        if generated:
+            return generated, "generated_vertex"
+    except Exception:
+        logger.exception("vertex story generation failed; falling back")
+
+    return _fallback_story_variants(transcript, context, title, speaker_tag), "generated_fallback"
 
 
 def generate_cover_svg(memory_id: str, title: str, prompt: str) -> str:

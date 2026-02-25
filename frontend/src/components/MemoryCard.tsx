@@ -20,11 +20,11 @@ export function MemoryCard({ item, busy, onTranscribe, onStory, onCover }: Memor
       <div className="memory-content">
         <h3>{item.title}</h3>
         <p className="meta">{new Date(item.created_at).toLocaleString()}</p>
-        <p className="excerpt">{item.story_short || item.transcript.slice(0, 120) || 'Record and transcribe to generate a story.'}</p>
+        <p className="excerpt">{item.ai_summary || item.transcript.slice(0, 120) || 'Record and transcribe to generate a story.'}</p>
         <div className="actions">
           <button className="chip" disabled={busy} onClick={() => onTranscribe(item.id)}>Transcribe</button>
           <button className="chip" disabled={busy || !item.transcript} onClick={() => onStory(item.id)}>Create Story</button>
-          <button className="chip" disabled={busy || !item.story_short} onClick={() => onCover(item.id)}>Create Cover</button>
+          <button className="chip" disabled={busy || !item.ai_summary} onClick={() => onCover(item.id)}>Create Cover</button>
         </div>
       </div>
     </article>

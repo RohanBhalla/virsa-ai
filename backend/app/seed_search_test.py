@@ -4,12 +4,13 @@ Run from backend dir: python -m app.seed_search_test
 """
 from __future__ import annotations
 
+import argparse
 from uuid import uuid4
 
-from .db import init_db, memories_collection, chunks_collection, now_iso
+from .db import init_db, memories_collection, chunks_collection, now_iso, users_collection
 from .rag import chunk_text, embed_texts, embedding_model_name
 
-TEST_USER_ID = "a672f3b6-50bf-401d-b3fe-ad7fb534e332"
+DEFAULT_TEST_USER_ID = "a33561f9-2242-4c37-b282-c9a0147efb99"
 
 # Distinct stories so semantic search can match queries like "war", "recipe", "lake", "wedding"
 TEST_MEMORIES = [
@@ -23,7 +24,7 @@ TEST_MEMORIES = [
             "every week. When he came home he brought a small photograph of my grandmother that he had carried in his "
             "pocket the whole time. We still have that photograph in the family album."
         ),
-        "story_short": "Grandpa Joe shared how his unit was trapped behind enemy lines and how he carried a photo of Grandma the whole war.",
+        "ai_summary": "Grandpa Joe shared how his unit was trapped behind enemy lines and how he carried a photo of Grandma through the war.",
     },
     {
         "title": "Mother's Apple Pie Recipe",
@@ -35,7 +36,7 @@ TEST_MEMORIES = [
             "of baking pie filled the whole house. Now I make it with my own daughter every year. It's our family "
             "tradition. You can add a little nutmeg if you like. Serve it warm with vanilla ice cream."
         ),
-        "story_short": "A family recipe for apple pie passed down through generations, made at Thanksgiving.",
+        "ai_summary": "A family apple pie recipe passed down through generations and made every Thanksgiving.",
     },
     {
         "title": "Family Reunion at the Lake",
@@ -47,7 +48,7 @@ TEST_MEMORIES = [
             "with my clothes on. We still laugh about that. The lake was so clear you could see the fish. At night we "
             "would sit around the fire and tell stories. I miss those summers at the lake."
         ),
-        "story_short": "Summer reunions at the lake with swimming, picnics, and stories by the fire.",
+        "ai_summary": "Summer reunions at the lake with swimming, picnics, and stories by the fire.",
     },
     {
         "title": "Aunt Maria's Wedding Day",
@@ -59,17 +60,36 @@ TEST_MEMORIES = [
             "beautiful cake with flowers. We danced until midnight. My husband and I have been married for thirty "
             "years now. I still look at the wedding photos every anniversary."
         ),
-        "story_short": "Aunt Maria's wedding in the family church, wearing her mother's veil, with a garden reception.",
+        "ai_summary": "Aunt Maria's wedding in the family church, wearing her mother's veil, followed by a garden reception.",
     },
 ]
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Seed RAG test memories/chunks for a user account.")
+    parser.add_argument(
+        "--user-id",
+        default=DEFAULT_TEST_USER_ID,
+        help=f"Target account/user id (default: {DEFAULT_TEST_USER_ID})",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
+    target_user_id = args.user_id.strip()
+
+    if not target_user_id:
+        raise ValueError("user_id cannot be empty")
+
     init_db()
     now = now_iso()
     mem_col = memories_collection()
     chunk_col = chunks_collection()
     model_name = embedding_model_name()
+    has_user = users_collection().find_one({"id": target_user_id}, {"_id": 1}) is not None
+    if not has_user:
+        print(f"Warning: no user row found with id={target_user_id}. Seeding will continue with this user_id.")
 
     for m in TEST_MEMORIES:
         memory_id = str(uuid4())
@@ -85,11 +105,11 @@ def main() -> None:
                 "audio": {},
                 "transcript": transcript,
                 "transcript_timing": [],
-                "story_short": m["story_short"],
-                "story_long": m["story_short"],
+                "story_children": m["ai_summary"],
+                "story_narration": m["ai_summary"],
                 "cover_path": "",
                 "mood_tag": "unknown",
-                "ai_summary": m["story_short"][:240],
+                "ai_summary": m["ai_summary"][:240],
                 "ai_summary_status": "generated_fallback",
                 "embedding_status": {
                     "indexed": True,
@@ -97,7 +117,7 @@ def main() -> None:
                     "model": model_name,
                     "indexed_at": now,
                 },
-                "user_id": TEST_USER_ID,
+                "user_id": target_user_id,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -106,7 +126,7 @@ def main() -> None:
         chunk_docs = [
             {
                 "memory_id": memory_id,
-                "user_id": TEST_USER_ID,
+                "user_id": target_user_id,
                 "idx": idx,
                 "content": chunk,
                 "embedding": vectors[idx],
@@ -119,7 +139,7 @@ def main() -> None:
         chunk_col.insert_many(chunk_docs)
         print(f"  Inserted memory {memory_id}: {m['title']} ({len(chunks)} chunks)")
 
-    print(f"\nDone. Created {len(TEST_MEMORIES)} memories with vector chunks for user_id={TEST_USER_ID}")
+    print(f"\nDone. Created {len(TEST_MEMORIES)} memories with vector chunks for user_id={target_user_id}")
     print("Try searching for: 'war', 'recipe', 'lake', 'wedding'")
 
 

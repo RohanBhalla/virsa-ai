@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from gridfs import GridFSBucket
 from pydantic import BaseModel, Field
 
-from .config import APP_ORIGIN, AUDIO_DIR, COVER_DIR, STORE_AUDIO_IN_GRIDFS
+from .config import APP_ORIGIN, AUDIO_DIR, COVER_DIR, STORE_AUDIO_IN_GRIDFS, VOICE_SEARCH_LANGUAGE_HINT
 from .auth import (
     AuthError,
     authenticate_user,
@@ -40,7 +40,7 @@ from .db import (
 )
 from .rag import index_transcript, join_context, retrieve, search_stories
 from .services import (
-    fallback_story_from_transcript,
+    generate_story_variants,
     generate_cover_svg,
     infer_mood_tag,
     transcribe_with_elevenlabs,
@@ -276,8 +276,8 @@ async def create_memory(
             },
             "transcript": "",
             "transcript_timing": [],
-            "story_short": "",
-            "story_long": "",
+            "story_children": "",
+            "story_narration": "",
             "cover_path": "",
             "mood_tag": "unknown",
             "ai_summary": "",
@@ -326,8 +326,11 @@ async def _search_request_body(request: Request) -> tuple[str, UploadFile | None
     if "multipart/form-data" in content_type:
         form = await request.form()
         search_query = (form.get("query") or "").strip()
-        if isinstance(form.get("audio"), UploadFile):
-            audio_file = form.get("audio")
+        maybe_audio = form.get("audio")
+        if isinstance(maybe_audio, UploadFile) or (
+            hasattr(maybe_audio, "filename") and hasattr(maybe_audio, "file")
+        ):
+            audio_file = maybe_audio
         return search_query, audio_file
 
     return "", None
@@ -346,9 +349,12 @@ async def search_memories(
             shutil.copyfileobj(audio_file.file, tmp)
             tmp_path = Path(tmp.name)
         try:
-            transcript, _, ok, _ = await transcribe_with_elevenlabs(tmp_path)
+            language_hint = None if VOICE_SEARCH_LANGUAGE_HINT == "auto" else VOICE_SEARCH_LANGUAGE_HINT
+            transcript, _, ok, message = await transcribe_with_elevenlabs(tmp_path, language_code=language_hint)
             if ok and (transcript or "").strip():
                 search_query = transcript.strip()
+            elif not search_query:
+                raise HTTPException(status_code=502, detail=message or "Audio transcription failed.")
         finally:
             tmp_path.unlink(missing_ok=True)
 
@@ -477,18 +483,22 @@ def build_story(
 
     relevant_chunks = retrieve(memory_id, prompt, top_k=5)
     context = join_context(relevant_chunks)
-    short_story, long_story = fallback_story_from_transcript(transcript, context)
-
-    summary = short_story[:240]
+    variants, generation_status = generate_story_variants(
+        transcript=transcript,
+        context=context,
+        prompt=prompt,
+        title=str(row.get("title") or ""),
+        speaker_tag=str(row.get("speaker_tag") or ""),
+    )
 
     memories_collection().update_one(
         {"id": memory_id, "user_id": _user_id(user)},
         {
             "$set": {
-                "story_short": short_story,
-                "story_long": long_story,
-                "ai_summary": summary,
-                "ai_summary_status": "generated_fallback",
+                "ai_summary": variants["ai_summary"],
+                "story_children": variants["story_children"],
+                "story_narration": variants["story_narration"],
+                "ai_summary_status": generation_status,
                 "updated_at": now_iso(),
             }
         },
@@ -498,9 +508,10 @@ def build_story(
         "id": memory_id,
         "prompt": prompt,
         "context": relevant_chunks,
-        "story_short": short_story,
-        "story_long": long_story,
-        "ai_summary": summary,
+        "ai_summary": variants["ai_summary"],
+        "story_children": variants["story_children"],
+        "story_narration": variants["story_narration"],
+        "ai_summary_status": generation_status,
     }
 
 

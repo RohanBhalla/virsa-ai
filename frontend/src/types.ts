@@ -11,8 +11,10 @@ export type Memory = {
   audio_path: string
   transcript: string
   transcript_timing: TranscriptWord[]
-  story_short: string
-  story_long: string
+  story_children: string
+  story_narration: string
+  ai_summary: string
+  ai_summary_status: string
   cover_path: string
   created_at: string
   updated_at: string

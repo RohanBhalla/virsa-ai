@@ -1,7 +1,10 @@
 import type { AuthResponse, Memory, TranscriptWord, User } from './types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+const ACCESS_TOKEN_KEY = 'virsa_access_token'
+const REFRESH_TOKEN_KEY = 'virsa_refresh_token'
 let accessToken = ''
+let refreshInFlight: Promise<boolean> | null = null
 
 function parseApiError(raw: string, status: number): string {
   try {
@@ -17,7 +20,49 @@ export function setAccessToken(token: string) {
   accessToken = token
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+function clearStoredAuth() {
+  localStorage.removeItem(ACCESS_TOKEN_KEY)
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  accessToken = ''
+}
+
+async function refreshAccessTokenFromStorage(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight
+
+  const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || ''
+  if (!refreshToken) return false
+
+  refreshInFlight = (async () => {
+    const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    if (!res.ok) {
+      clearStoredAuth()
+      return false
+    }
+
+    const data = (await res.json()) as { access_token: string; refresh_token: string }
+    if (!data.access_token || !data.refresh_token) {
+      clearStoredAuth()
+      return false
+    }
+
+    accessToken = data.access_token
+    localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+    localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
+    return true
+  })()
+
+  try {
+    return await refreshInFlight
+  } finally {
+    refreshInFlight = null
+  }
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit, hasRetried = false): Promise<T> {
   const headers = new Headers(init?.headers)
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
 
@@ -25,6 +70,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
     headers,
   })
+
+  if (res.status === 401 && !hasRetried) {
+    const refreshed = await refreshAccessTokenFromStorage()
+    if (refreshed) return fetchJson<T>(url, init, true)
+  }
+
   if (!res.ok) {
     const text = await res.text()
     throw new Error(parseApiError(text, res.status))
@@ -51,10 +102,23 @@ export async function transcribeMemory(id: string): Promise<{ transcript: string
   })
 }
 
-export async function generateStory(id: string, prompt: string): Promise<{ story_short: string; story_long: string }> {
+export async function generateStory(
+  id: string,
+  prompt: string
+): Promise<{
+  ai_summary: string
+  story_children: string
+  story_narration: string
+  ai_summary_status: string
+}> {
   const fd = new FormData()
   fd.append('prompt', prompt)
-  return fetchJson<{ story_short: string; story_long: string }>(`/api/memories/${id}/story`, {
+  return fetchJson<{
+    ai_summary: string
+    story_children: string
+    story_narration: string
+    ai_summary_status: string
+  }>(`/api/memories/${id}/story`, {
     method: 'POST',
     body: fd,
   })
@@ -114,7 +178,15 @@ export async function getMe(): Promise<User> {
 export async function fetchProtectedBlob(path: string): Promise<Blob> {
   const headers = new Headers()
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
-  const res = await fetch(`${API_BASE}${path}`, { headers })
+  let res = await fetch(`${API_BASE}${path}`, { headers })
+  if (res.status === 401) {
+    const refreshed = await refreshAccessTokenFromStorage()
+    if (refreshed) {
+      const retryHeaders = new Headers()
+      if (accessToken) retryHeaders.set('Authorization', `Bearer ${accessToken}`)
+      res = await fetch(`${API_BASE}${path}`, { headers: retryHeaders })
+    }
+  }
   if (!res.ok) {
     const text = await res.text()
     throw new Error(parseApiError(text, res.status))
