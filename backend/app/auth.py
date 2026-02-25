@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -26,6 +27,7 @@ from .db import now_iso, sessions_collection, users_collection
 
 password_hasher = PasswordHasher()
 security = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 
 class AuthError(Exception):
@@ -176,12 +178,53 @@ def _sanitize_user(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _user_update_query(user: dict[str, Any]) -> dict[str, Any]:
+    user_id = str(user.get("id") or "").strip()
+    if user_id:
+        return {"id": user_id}
+    return {"email": str(user.get("email") or "").strip().lower()}
+
+
+def _verify_and_maybe_migrate_password(user: dict[str, Any], password: str) -> bool:
+    stored_hash = str(user.get("password_hash") or "")
+    if stored_hash and verify_password(password, stored_hash):
+        if password_hasher.check_needs_rehash(stored_hash):
+            users_collection().update_one(
+                _user_update_query(user),
+                {"$set": {"password_hash": hash_password(password), "updated_at": now_iso()}},
+            )
+        return True
+
+    # Backward compatibility for early local data where password/plain hash may have been stored.
+    legacy_password = user.get("password")
+    if isinstance(legacy_password, str) and legacy_password and hmac.compare_digest(legacy_password, password):
+        users_collection().update_one(
+            _user_update_query(user),
+            {
+                "$set": {"password_hash": hash_password(password), "updated_at": now_iso()},
+                "$unset": {"password": ""},
+            },
+        )
+        logger.info("Migrated legacy plaintext password to password_hash for email=%s", user.get("email"))
+        return True
+
+    if stored_hash and not stored_hash.startswith("$argon2") and hmac.compare_digest(stored_hash, password):
+        users_collection().update_one(
+            _user_update_query(user),
+            {"$set": {"password_hash": hash_password(password), "updated_at": now_iso()}},
+        )
+        logger.info("Migrated legacy non-argon2 password_hash for email=%s", user.get("email"))
+        return True
+
+    return False
+
+
 def authenticate_user(email: str, password: str) -> dict[str, Any] | None:
     normalized = email.strip().lower()
     user = users_collection().find_one({"email": normalized}, {"_id": 0})
     if not user:
         return None
-    if not verify_password(password, str(user.get("password_hash") or "")):
+    if not _verify_and_maybe_migrate_password(user, password):
         return None
     return user
 

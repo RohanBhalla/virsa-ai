@@ -79,7 +79,8 @@ async function fetchJson<T>(url: string, init?: RequestInit, hasRetried = false)
     headers,
   })
 
-  if (res.status === 401 && !hasRetried) {
+  const isAuthRoute = url.startsWith('/api/auth/')
+  if (res.status === 401 && !hasRetried && !isAuthRoute) {
     const refreshed = await refreshAccessTokenFromStorage()
     if (refreshed) return fetchJson<T>(url, init, true)
   }
