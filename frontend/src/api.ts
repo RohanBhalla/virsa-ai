@@ -146,6 +146,31 @@ export async function generateStory(
   })
 }
 
+export async function ensureStoryAudio(
+  id: string,
+  variant: 'children' | 'narration'
+): Promise<{
+  id: string
+  variant: 'children' | 'narration'
+  audio_path: string
+  transcript: string
+  transcript_timing: TranscriptWord[]
+  status: string
+  voice_id?: string
+}> {
+  return fetchJson<{
+    id: string
+    variant: 'children' | 'narration'
+    audio_path: string
+    transcript: string
+    transcript_timing: TranscriptWord[]
+    status: string
+    voice_id?: string
+  }>(`/api/memories/${id}/story-audio/${variant}`, {
+    method: 'POST',
+  })
+}
+
 export async function generateCover(id: string, prompt: string): Promise<{ cover_url: string; cover_status?: string }> {
   const fd = new FormData()
   fd.append('prompt', prompt)

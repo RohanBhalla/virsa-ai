@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from gridfs import GridFSBucket
 from pydantic import BaseModel, Field
 
-from .config import APP_ORIGIN, AUDIO_DIR, COVER_DIR, STORE_AUDIO_IN_GRIDFS, VOICE_SEARCH_LANGUAGE_HINT
+from .config import APP_ORIGIN, AUDIO_DIR, COVER_DIR, STORE_AUDIO_IN_GRIDFS, STORY_AUDIO_DIR, VOICE_SEARCH_LANGUAGE_HINT
 from .auth import (
     AuthError,
     authenticate_user,
@@ -54,6 +54,7 @@ from .services import (
     generate_cover_svg,
     infer_mood_tag,
     infer_themes,
+    synthesize_story_audio_with_elevenlabs,
     transcribe_with_elevenlabs,
 )
 
@@ -794,6 +795,120 @@ def _materialize_audio(memory: dict) -> Path | None:
         return None
 
 
+StoryVariant = Literal["children", "narration"]
+
+
+def _story_variant_or_400(variant: str) -> StoryVariant:
+    clean = variant.strip().lower()
+    if clean not in {"children", "narration"}:
+        raise HTTPException(status_code=400, detail="Variant must be 'children' or 'narration'")
+    return clean
+
+
+def _story_variant_text(row: dict, variant: StoryVariant) -> str:
+    primary = str(row.get("story_children") if variant == "children" else row.get("story_narration") or "")
+    clean_primary = " ".join(primary.split())
+    if clean_primary:
+        return clean_primary
+
+    summary = " ".join(str(row.get("ai_summary") or "").split())
+    if summary:
+        if variant == "children":
+            return f"Child-friendly retelling: {summary}"
+        return f"Documentary narration: {summary}"
+
+    transcript = " ".join(str(row.get("transcript") or "").split())
+    if transcript:
+        if variant == "children":
+            return f"Child-friendly retelling: {transcript}"
+        return f"Documentary narration: {transcript}"
+    return ""
+
+
+def _story_variant_audio_doc(row: dict, variant: StoryVariant) -> dict:
+    story_audio = row.get("story_audio")
+    if not isinstance(story_audio, dict):
+        return {}
+    item = story_audio.get(variant)
+    return item if isinstance(item, dict) else {}
+
+
+def _story_variant_file_path(memory_id: str, variant: StoryVariant) -> Path:
+    return STORY_AUDIO_DIR / f"{memory_id}_{variant}.mp3"
+
+
+def _ensure_story_variant_audio(row: dict, user_id: str, variant: StoryVariant) -> dict:
+    memory_id = str(row.get("id") or "")
+    if not memory_id:
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    existing = _story_variant_audio_doc(row, variant)
+    existing_path = str(existing.get("file_path") or "")
+    existing_file = Path(existing_path) if existing_path else _story_variant_file_path(memory_id, variant)
+    if existing_path and existing_file.exists():
+        return {
+            "audio_path": f"/api/memories/{memory_id}/story-audio/{variant}",
+            "transcript": str(existing.get("transcript") or ""),
+            "transcript_timing": existing.get("transcript_timing") if isinstance(existing.get("transcript_timing"), list) else [],
+            "status": str(existing.get("status") or "ready"),
+            "voice_id": str(existing.get("voice_id") or ""),
+        }
+
+    text = " ".join(_story_variant_text(row, variant).split())
+    if not text:
+        raise HTTPException(status_code=400, detail=f"{variant.title()} version not generated yet.")
+
+    source_audio = _materialize_audio(row)
+    if not source_audio:
+        raise HTTPException(status_code=404, detail="Source audio file not found")
+
+    existing_story_audio = row.get("story_audio") if isinstance(row.get("story_audio"), dict) else {}
+    voice_clone = existing_story_audio.get("voice_clone") if isinstance(existing_story_audio.get("voice_clone"), dict) else {}
+    preferred_voice_id = str(voice_clone.get("voice_id") or "")
+    speaker_tag = str(row.get("speaker_tag") or "")
+    audio_bytes, mime_type, words, voice_id, synth_status = synthesize_story_audio_with_elevenlabs(
+        text=text,
+        memory_id=memory_id,
+        speaker_tag=speaker_tag,
+        source_audio_path=source_audio,
+        preferred_voice_id=preferred_voice_id,
+    )
+    if not audio_bytes:
+        raise HTTPException(status_code=502, detail=f"Story audio generation failed: {synth_status}")
+
+    out_file = _story_variant_file_path(memory_id, variant)
+    out_file.write_bytes(audio_bytes)
+    now = now_iso()
+    voice_clone_status = "voice_reused" if preferred_voice_id and preferred_voice_id == voice_id else synth_status
+
+    updates: dict[str, object] = {
+        f"story_audio.{variant}.file_path": str(out_file),
+        f"story_audio.{variant}.mime_type": mime_type,
+        f"story_audio.{variant}.transcript": text,
+        f"story_audio.{variant}.transcript_timing": words,
+        f"story_audio.{variant}.voice_id": voice_id,
+        f"story_audio.{variant}.status": "ready",
+        f"story_audio.{variant}.updated_at": now,
+        "updated_at": now,
+    }
+    if voice_id:
+        updates["story_audio.voice_clone.voice_id"] = voice_id
+        updates["story_audio.voice_clone.status"] = voice_clone_status
+        updates["story_audio.voice_clone.updated_at"] = now
+
+    memories_collection().update_one(
+        {"id": memory_id, "user_id": user_id},
+        {"$set": updates},
+    )
+    return {
+        "audio_path": f"/api/memories/{memory_id}/story-audio/{variant}",
+        "transcript": text,
+        "transcript_timing": words,
+        "status": "ready",
+        "voice_id": voice_id,
+    }
+
+
 def _user_id(user: dict) -> str:
     return str(user.get("id") or "")
 
@@ -880,6 +995,11 @@ async def create_memory(
             "transcript_timing": [],
             "story_children": "",
             "story_narration": "",
+            "story_audio": {
+                "children": {},
+                "narration": {},
+                "voice_clone": {},
+            },
             "cover_path": "",
             "mood_tag": "unknown",
             "themes": [],
@@ -1120,6 +1240,47 @@ def get_memory_audio(memory_id: str, user: dict = Depends(get_current_user)):
     return FileResponse(audio_path)
 
 
+@app.post("/api/memories/{memory_id}/story-audio/{variant}")
+def ensure_story_audio_variant(
+    memory_id: str,
+    variant: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    clean_variant = _story_variant_or_400(variant)
+    clean_user_id = _user_id(user)
+    row = _owned_memory_or_404(memory_id, clean_user_id)
+    payload = _ensure_story_variant_audio(row, clean_user_id, clean_variant)
+    return {
+        "id": memory_id,
+        "variant": clean_variant,
+        **payload,
+    }
+
+
+@app.get("/api/memories/{memory_id}/story-audio/{variant}")
+def get_story_audio_variant(
+    memory_id: str,
+    variant: str,
+    user: dict = Depends(get_current_user),
+):
+    clean_variant = _story_variant_or_400(variant)
+    clean_user_id = _user_id(user)
+    row = _owned_memory_or_404(memory_id, clean_user_id)
+    _ensure_story_variant_audio(row, clean_user_id, clean_variant)
+
+    latest = _owned_memory_or_404(memory_id, clean_user_id)
+    audio_doc = _story_variant_audio_doc(latest, clean_variant)
+    file_path = str(audio_doc.get("file_path") or "")
+    if not file_path:
+        raise HTTPException(status_code=404, detail="Story audio file not found")
+    out_path = Path(file_path)
+    if not out_path.exists():
+        raise HTTPException(status_code=404, detail="Story audio file not found")
+
+    media_type = str(audio_doc.get("mime_type") or "audio/mpeg")
+    return FileResponse(out_path, media_type=media_type, filename=f"{memory_id}_{clean_variant}.mp3")
+
+
 @app.post("/api/memories/{memory_id}/transcribe")
 async def transcribe_memory(memory_id: str, user: dict = Depends(get_current_user)) -> dict:
     row = _owned_memory_or_404(memory_id, _user_id(user))
@@ -1173,7 +1334,8 @@ def build_story(
     prompt: str = Form(default="Create a heartfelt family story."),
     user: dict = Depends(get_current_user),
 ) -> dict:
-    row = _owned_memory_or_404(memory_id, _user_id(user))
+    clean_user_id = _user_id(user)
+    row = _owned_memory_or_404(memory_id, clean_user_id)
 
     transcript = str(row.get("transcript") or "")
     if not transcript:
@@ -1190,17 +1352,32 @@ def build_story(
     )
 
     memories_collection().update_one(
-        {"id": memory_id, "user_id": _user_id(user)},
+        {"id": memory_id, "user_id": clean_user_id},
         {
             "$set": {
                 "ai_summary": variants["ai_summary"],
                 "story_children": variants["story_children"],
                 "story_narration": variants["story_narration"],
                 "ai_summary_status": generation_status,
+                "story_audio.children": {},
+                "story_audio.narration": {},
                 "updated_at": now_iso(),
             }
         },
     )
+
+    refreshed = _owned_memory_or_404(memory_id, clean_user_id)
+    audio_status: dict[str, str] = {}
+    for variant in ("children", "narration"):
+        try:
+            _ensure_story_variant_audio(refreshed, clean_user_id, variant)
+            audio_status[variant] = "ready"
+            refreshed = _owned_memory_or_404(memory_id, clean_user_id)
+        except HTTPException as exc:
+            audio_status[variant] = f"error:{exc.detail}"
+        except Exception:
+            logger.exception("story_audio_generation_failed memory_id=%s variant=%s", memory_id, variant)
+            audio_status[variant] = "error:unexpected_failure"
 
     return {
         "id": memory_id,
@@ -1210,6 +1387,7 @@ def build_story(
         "story_children": variants["story_children"],
         "story_narration": variants["story_narration"],
         "ai_summary_status": generation_status,
+        "story_audio_status": audio_status,
     }
 
 

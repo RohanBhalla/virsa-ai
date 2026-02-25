@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import json
@@ -13,8 +14,13 @@ import httpx
 from .config import (
     COVER_DIR,
     ELEVENLABS_API_KEY,
+    ELEVENLABS_DEFAULT_VOICE_ID,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_STT_URL,
+    ELEVENLABS_TTS_BASE_URL,
+    ELEVENLABS_TTS_MODEL_ID,
+    ELEVENLABS_TTS_OUTPUT_FORMAT,
+    ELEVENLABS_VOICES_URL,
     VERTEX_ACCESS_TOKEN,
     VERTEX_API_KEY,
     VERTEX_COVER_MODEL,
@@ -259,6 +265,215 @@ def generate_story_variants(
     return _fallback_story_variants(transcript, context, title, speaker_tag), "generated_fallback"
 
 
+def _extract_word_timing_from_alignment(payload: dict) -> list[dict[str, float | str]]:
+    alignment = payload.get("alignment")
+    if not isinstance(alignment, dict):
+        alignment = payload.get("normalized_alignment")
+    if not isinstance(alignment, dict):
+        return []
+
+    chars = alignment.get("characters")
+    starts = alignment.get("character_start_times_seconds")
+    ends = alignment.get("character_end_times_seconds")
+    if not isinstance(chars, list) or not isinstance(starts, list) or not isinstance(ends, list):
+        return []
+    count = min(len(chars), len(starts), len(ends))
+    if count <= 0:
+        return []
+
+    words: list[dict[str, float | str]] = []
+    buffer = ""
+    word_start: float | None = None
+    word_end = 0.0
+
+    def flush_word() -> None:
+        nonlocal buffer, word_start, word_end
+        clean = buffer.strip()
+        if clean and word_start is not None:
+            words.append({"text": clean, "start": max(0.0, word_start), "end": max(word_start, word_end)})
+        buffer = ""
+        word_start = None
+        word_end = 0.0
+
+    for i in range(count):
+        ch = str(chars[i] or "")
+        start = _as_float(starts[i])
+        end = _as_float(ends[i])
+        if start is None or end is None:
+            continue
+
+        if ch.isspace():
+            flush_word()
+            continue
+
+        if word_start is None:
+            word_start = start
+        buffer += ch
+        word_end = max(word_end, end)
+
+    flush_word()
+    return words
+
+
+def _approximate_word_timing(text: str, total_seconds: float = 0.0) -> list[dict[str, float | str]]:
+    words_raw = [w for w in re.split(r"\s+", text.strip()) if w]
+    if not words_raw:
+        return []
+    # Fallback timing when provider timestamps are unavailable.
+    duration = total_seconds if total_seconds > 0 else max(2.0, min(120.0, len(words_raw) * 0.42))
+    step = duration / max(1, len(words_raw))
+    out: list[dict[str, float | str]] = []
+    cursor = 0.0
+    for token in words_raw:
+        start = cursor
+        end = start + step
+        out.append({"text": token, "start": start, "end": end})
+        cursor = end
+    return out
+
+
+def _voice_clone_name(memory_id: str, speaker_tag: str) -> str:
+    speaker = re.sub(r"[^a-zA-Z0-9_-]+", "-", (speaker_tag or "speaker").strip()).strip("-")
+    short_id = (memory_id or "")[:8] or "memory"
+    return f"virsa-{speaker or 'speaker'}-{short_id}"[:60]
+
+
+def _clone_voice_from_sample(audio_path: Path, memory_id: str, speaker_tag: str) -> tuple[str | None, str]:
+    if not ELEVENLABS_API_KEY:
+        return None, "missing_elevenlabs_api_key"
+
+    headers = {"xi-api-key": ELEVENLABS_API_KEY}
+    data = {"name": _voice_clone_name(memory_id, speaker_tag)}
+    try:
+        with audio_path.open("rb") as sample:
+            files = {"files": (audio_path.name, sample, "audio/webm")}
+            with httpx.Client(timeout=90) as client:
+                response = client.post(f"{ELEVENLABS_VOICES_URL.rstrip('/')}/add", headers=headers, data=data, files=files)
+        if response.status_code >= 400:
+            return None, f"voice_clone_failed_{response.status_code}"
+        payload = response.json()
+        voice_id = payload.get("voice_id")
+        if isinstance(voice_id, str) and voice_id.strip():
+            return voice_id.strip(), "voice_clone_created"
+    except Exception:
+        logger.exception("voice_clone_failed memory_id=%s", memory_id)
+    return None, "voice_clone_failed"
+
+
+def _pick_existing_voice_id() -> str:
+    if not ELEVENLABS_API_KEY:
+        return ""
+    headers = {"xi-api-key": ELEVENLABS_API_KEY}
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.get(ELEVENLABS_VOICES_URL.rstrip("/"), headers=headers)
+        if response.status_code >= 400:
+            return ""
+        payload = response.json()
+        voices = payload.get("voices")
+        if not isinstance(voices, list):
+            return ""
+        for voice in voices:
+            if not isinstance(voice, dict):
+                continue
+            voice_id = voice.get("voice_id")
+            if isinstance(voice_id, str) and voice_id.strip():
+                return voice_id.strip()
+    except Exception:
+        logger.exception("list_voices_failed")
+    return ""
+
+
+def synthesize_story_audio_with_elevenlabs(
+    *,
+    text: str,
+    memory_id: str,
+    speaker_tag: str,
+    source_audio_path: Path,
+    preferred_voice_id: str = "",
+) -> tuple[bytes, str, list[dict[str, float | str]], str, str]:
+    clean_text = " ".join((text or "").split())
+    if len(clean_text) > 4500:
+        clean_text = textwrap.shorten(clean_text, width=4500, placeholder="...")
+    if not clean_text:
+        return b"", "audio/mpeg", [], "", "missing_text"
+    if not ELEVENLABS_API_KEY:
+        return b"", "audio/mpeg", [], "", "missing_elevenlabs_api_key"
+
+    selected_voice = preferred_voice_id.strip()
+    status = "voice_reused"
+    if not selected_voice:
+        selected_voice, status = _clone_voice_from_sample(source_audio_path, memory_id, speaker_tag)
+    if not selected_voice:
+        selected_voice = ELEVENLABS_DEFAULT_VOICE_ID.strip()
+        if selected_voice:
+            status = "voice_fallback_default"
+    if not selected_voice:
+        selected_voice = _pick_existing_voice_id()
+        if selected_voice:
+            status = "voice_fallback_existing"
+    if not selected_voice:
+        return b"", "audio/mpeg", [], "", "no_voice_available"
+
+    payload = {
+        "text": clean_text,
+        "model_id": ELEVENLABS_TTS_MODEL_ID,
+        "output_format": ELEVENLABS_TTS_OUTPUT_FORMAT,
+    }
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    url = f"{ELEVENLABS_TTS_BASE_URL.rstrip('/')}/{selected_voice}/with-timestamps"
+    try:
+        with httpx.Client(timeout=120) as client:
+            response = client.post(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            detail_preview = " ".join((response.text or "").split())[:140]
+            logger.error(
+                "story_tts_with_timestamps_failed memory_id=%s status=%s detail=%s",
+                memory_id,
+                response.status_code,
+                detail_preview,
+            )
+            fallback_url = f"{ELEVENLABS_TTS_BASE_URL.rstrip('/')}/{selected_voice}"
+            fallback_headers = {
+                "xi-api-key": ELEVENLABS_API_KEY,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            }
+            with httpx.Client(timeout=120) as client:
+                fallback = client.post(
+                    fallback_url,
+                    headers=fallback_headers,
+                    params={"output_format": ELEVENLABS_TTS_OUTPUT_FORMAT},
+                    json={"text": clean_text, "model_id": ELEVENLABS_TTS_MODEL_ID},
+                )
+            if fallback.status_code >= 400:
+                fallback_preview = " ".join((fallback.text or "").split())[:140]
+                logger.error(
+                    "story_tts_fallback_failed memory_id=%s status=%s detail=%s",
+                    memory_id,
+                    fallback.status_code,
+                    fallback_preview,
+                )
+                return b"", "audio/mpeg", [], "", f"tts_failed_{response.status_code}"
+            audio_bytes = fallback.content
+            approx_words = _approximate_word_timing(clean_text)
+            return audio_bytes, "audio/mpeg", approx_words, selected_voice, "tts_fallback_no_timestamps"
+        body = response.json()
+        audio_b64 = body.get("audio_base64")
+        if not isinstance(audio_b64, str) or not audio_b64:
+            return b"", "audio/mpeg", [], "", "tts_missing_audio"
+        audio_bytes = base64.b64decode(audio_b64)
+        words = _extract_word_timing_from_alignment(body)
+        return audio_bytes, "audio/mpeg", words, selected_voice, status
+    except Exception:
+        logger.exception("story_tts_failed memory_id=%s", memory_id)
+        return b"", "audio/mpeg", [], "", "tts_failed"
+
+
 def _normalize_hex_color(value: object, fallback: str) -> str:
     if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value.strip()):
         return value.strip().lower()
@@ -458,9 +673,7 @@ def _render_image_cover_svg(
 ) -> str:
     _ = (title, caption)
     svg = f"""<svg xmlns='http://www.w3.org/2000/svg' width='800' height='1200' viewBox='0 0 800 1200'>
-  <image href='data:{image_mime_type};base64,{image_b64}' x='0' y='0' width='800' height='1200' preserveAspectRatio='none'>
-    <animateTransform attributeName='transform' type='scale' values='1;1.025;1' dur='10s' repeatCount='indefinite'/>
-  </image>
+  <image href='data:{image_mime_type};base64,{image_b64}' x='0' y='0' width='800' height='1200' preserveAspectRatio='none'/>
 </svg>"""
 
     cover_path = COVER_DIR / f"{memory_id}.svg"

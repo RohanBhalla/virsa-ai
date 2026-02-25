@@ -108,6 +108,10 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _safe_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def memory_to_response(memory: dict[str, Any]) -> dict[str, Any]:
     memory_id = _safe_str(memory.get("id"))
 
@@ -116,6 +120,19 @@ def memory_to_response(memory: dict[str, Any]) -> dict[str, Any]:
     themes = _safe_list(memory.get("themes"))
     ai_summary = _safe_str(memory.get("ai_summary"))
     ai_summary_status = _safe_str(memory.get("ai_summary_status"))
+    story_audio = _safe_dict(memory.get("story_audio"))
+    children_audio = _safe_dict(story_audio.get("children"))
+    narration_audio = _safe_dict(story_audio.get("narration"))
+
+    def _variant_response(variant: str, payload: dict[str, Any]) -> dict[str, Any]:
+        has_file = bool(_safe_str(payload.get("file_path")))
+        return {
+            "audio_path": f"/api/memories/{memory_id}/story-audio/{variant}" if has_file else "",
+            "transcript": _safe_str(payload.get("transcript")),
+            "transcript_timing": _safe_list(payload.get("transcript_timing")),
+            "status": _safe_str(payload.get("status")),
+            "voice_id": _safe_str(payload.get("voice_id")),
+        }
 
     # Keep existing response fields stable for frontend compatibility.
     return {
@@ -130,6 +147,10 @@ def memory_to_response(memory: dict[str, Any]) -> dict[str, Any]:
         "transcript_timing": transcript_timing,
         "story_children": _safe_str(memory.get("story_children")),
         "story_narration": _safe_str(memory.get("story_narration")),
+        "story_audio": {
+            "children": _variant_response("children", children_audio),
+            "narration": _variant_response("narration", narration_audio),
+        },
         "cover_path": _safe_str(memory.get("cover_path")),
         "cover_status": _safe_str(memory.get("cover_status")),
         "mood_tag": mood_tag,

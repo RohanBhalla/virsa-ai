@@ -6,11 +6,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 DATA_DIR = BASE_DIR / "data"
 AUDIO_DIR = DATA_DIR / "audio"
+STORY_AUDIO_DIR = AUDIO_DIR / "story_variants"
 COVER_DIR = DATA_DIR / "covers"
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "scribe_v1")
 ELEVENLABS_STT_URL = os.getenv("ELEVENLABS_STT_URL", "https://api.elevenlabs.io/v1/speech-to-text")
+ELEVENLABS_TTS_MODEL_ID = os.getenv("ELEVENLABS_TTS_MODEL_ID", "eleven_multilingual_v2")
+ELEVENLABS_TTS_BASE_URL = os.getenv("ELEVENLABS_TTS_BASE_URL", "https://api.elevenlabs.io/v1/text-to-speech")
+ELEVENLABS_VOICES_URL = os.getenv("ELEVENLABS_VOICES_URL", "https://api.elevenlabs.io/v1/voices")
+ELEVENLABS_TTS_OUTPUT_FORMAT = os.getenv("ELEVENLABS_TTS_OUTPUT_FORMAT", "mp3_44100_128")
+ELEVENLABS_DEFAULT_VOICE_ID = os.getenv("ELEVENLABS_DEFAULT_VOICE_ID", "")
 VOICE_SEARCH_LANGUAGE_HINT = os.getenv("VOICE_SEARCH_LANGUAGE_HINT", "en").strip().lower()
 
 APP_ORIGIN = os.getenv("APP_ORIGIN", "http://localhost:5173")
@@ -61,5 +67,5 @@ ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "15"))
 REFRESH_TOKEN_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "14"))
 REFRESH_TOKEN_HASH_SECRET = os.getenv("REFRESH_TOKEN_HASH_SECRET", "")
 
-for path in (DATA_DIR, AUDIO_DIR, COVER_DIR):
+for path in (DATA_DIR, AUDIO_DIR, STORY_AUDIO_DIR, COVER_DIR):
     path.mkdir(parents=True, exist_ok=True)

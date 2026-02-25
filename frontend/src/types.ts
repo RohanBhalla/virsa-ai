@@ -4,6 +4,19 @@ export type TranscriptWord = {
   end: number
 }
 
+export type StoryAudioVariant = {
+  audio_path: string
+  transcript: string
+  transcript_timing: TranscriptWord[]
+  status: string
+  voice_id?: string
+}
+
+export type StoryAudio = {
+  children: StoryAudioVariant
+  narration: StoryAudioVariant
+}
+
 export type Memory = {
   id: string
   title: string
@@ -15,6 +28,7 @@ export type Memory = {
   transcript_timing: TranscriptWord[]
   story_children: string
   story_narration: string
+  story_audio?: StoryAudio
   ai_summary: string
   ai_summary_status: string
   cover_path: string

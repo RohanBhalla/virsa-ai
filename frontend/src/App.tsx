@@ -6,6 +6,7 @@ import {
   createMemory,
   deleteFamilyEdge,
   deleteFamilyPerson,
+  ensureStoryAudio,
   fetchProtectedBlob,
   getFamilyTree,
   generateCover,
@@ -166,10 +167,11 @@ function findActiveLineIndex(lines: LyricLine[], currentTime: number): number {
   return best
 }
 
-function formatTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60)
-  const secs = Math.floor(seconds % 60)
-  return `${mins}:${secs.toString().padStart(2, '0')}`
+function trimPreview(text: string, maxChars = 520): string {
+  const clean = (text || "").trim().split(/\s+/).join(' ')
+  if (!clean) return ''
+  if (clean.length <= maxChars) return clean
+  return `${clean.slice(0, maxChars - 1).trimEnd()}...`
 }
 
 function hashSeed(input: string): number {
@@ -372,8 +374,28 @@ export default function App() {
   const voiceRecorderRef = useRef<MediaRecorder | null>(null)
   const voiceChunksRef = useRef<Blob[]>([])
   const [playheadSeconds, setPlayheadSeconds] = useState(0)
+  const [audioDuration, setAudioDuration] = useState(0)
+  const [audioPlaying, setAudioPlaying] = useState(false)
   const [audioSrc, setAudioSrc] = useState('')
+  const [detailMode, setDetailMode] = useState<'reader' | 'listener' | 'geek'>('reader')
+  const [readerVersion, setReaderVersion] = useState<'narration' | 'summary' | 'original' | 'children'>('original')
   const [storyTab, setStoryTab] = useState<'summary' | 'children' | 'narration'>('summary')
+  const [storyAudioState, setStoryAudioState] = useState<
+    Partial<
+      Record<
+        'children' | 'narration',
+        {
+          audio_path: string
+          transcript: string
+          transcript_timing: TranscriptWord[]
+          status: string
+          voice_id?: string
+        }
+      >
+    >
+  >({})
+  const [storyAudioLoading, setStoryAudioLoading] = useState<'' | 'children' | 'narration'>('')
+  const [storyAudioError, setStoryAudioError] = useState('')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const lyricLineRefs = useRef<Array<HTMLButtonElement | null>>([])
   const profileMenuRef = useRef<HTMLDivElement | null>(null)
@@ -730,7 +752,44 @@ export default function App() {
     !!recordedBlob && !!draftTitle.trim() && !!selectedSpeakerPersonId && !isSavingRecord
 
   const detailItem = route.view === 'detail' ? memories.find((m) => m.id === route.id) : undefined
-  const lyricLines = useMemo(() => buildLyricLines(detailItem?.transcript_timing || []), [detailItem?.transcript_timing])
+  const selectedStoryVariant = storyTab === 'children' || storyTab === 'narration' ? storyTab : null
+  const selectedStoryAudio =
+    selectedStoryVariant
+      ? storyAudioState[selectedStoryVariant] || detailItem?.story_audio?.[selectedStoryVariant]
+      : null
+  const activeTranscriptWords = selectedStoryVariant
+    ? selectedStoryAudio?.transcript_timing || []
+    : detailItem?.transcript_timing || []
+  const activeTranscriptText = selectedStoryVariant
+    ? selectedStoryAudio?.transcript || (selectedStoryVariant === 'children' ? detailItem?.story_children : detailItem?.story_narration) || ''
+    : detailItem?.transcript || ''
+  const activeListenerLabel =
+    storyTab === 'summary' ? 'Original Recording' : storyTab === 'children' ? "Children's Narration" : 'Documentary Narration'
+  const readerVersionLabel =
+    readerVersion === 'narration'
+      ? 'Narration Style'
+      : readerVersion === 'summary'
+        ? 'AI Summary'
+        : readerVersion === 'children'
+          ? "Children's Version"
+          : 'Original Story'
+  const readerVersionText =
+    readerVersion === 'narration'
+      ? detailItem?.story_narration || ''
+      : readerVersion === 'summary'
+        ? detailItem?.ai_summary || ''
+        : readerVersion === 'children'
+          ? detailItem?.story_children || ''
+          : detailItem?.transcript || ''
+  const bookRightTitle =
+    detailMode === 'reader' ? readerVersionLabel : detailMode === 'listener' ? `Now Playing: ${activeListenerLabel}` : 'Geek Mode Preview'
+  const bookRightBody =
+    detailMode === 'reader'
+      ? trimPreview(readerVersionText)
+      : detailMode === 'listener'
+        ? trimPreview(activeTranscriptText || 'Start playback to see synced transcript lines highlighted in listener mode.')
+        : 'Placeholder for advanced timeline, model traces, and generation diagnostics.'
+  const lyricLines = useMemo(() => buildLyricLines(activeTranscriptWords), [activeTranscriptWords])
   const activeLyricIndex = useMemo(() => findActiveLineIndex(lyricLines, playheadSeconds), [lyricLines, playheadSeconds])
   const profileInitials = useMemo(() => userInitials(authUser), [authUser])
   const profileAvatarStyle = useMemo(() => {
@@ -823,20 +882,73 @@ export default function App() {
   useEffect(() => {
     lyricLineRefs.current = []
     setPlayheadSeconds(0)
+    setDetailMode('reader')
+    setReaderVersion('original')
     setStoryTab('summary')
+    setStoryAudioState({})
+    setStoryAudioLoading('')
+    setStoryAudioError('')
   }, [detailItem?.id])
+
+  useEffect(() => {
+    if (!detailItem || route.view !== 'detail') return
+    if (detailMode !== 'listener') return
+    if (storyTab !== 'children' && storyTab !== 'narration') return
+
+    const variant = storyTab
+    const existing = storyAudioState[variant] || detailItem.story_audio?.[variant]
+    if (existing?.audio_path && (existing.transcript_timing?.length || 0) > 0) return
+
+    let cancelled = false
+    setStoryAudioLoading(variant)
+    setStoryAudioError('')
+    ensureStoryAudio(detailItem.id, variant)
+      .then((data) => {
+        if (cancelled) return
+        setStoryAudioState((prev) => ({
+          ...prev,
+          [variant]: {
+            audio_path: data.audio_path,
+            transcript: data.transcript,
+            transcript_timing: data.transcript_timing,
+            status: data.status,
+            voice_id: data.voice_id,
+          },
+        }))
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setStoryAudioError(err instanceof Error ? err.message : 'Failed to load AI voice audio')
+      })
+      .finally(() => {
+        if (!cancelled) setStoryAudioLoading('')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [detailItem, detailMode, route.view, storyAudioState, storyTab])
 
   useEffect(() => {
     let cancelled = false
     let objectUrl = ''
 
     const loadAudio = async () => {
-      if (!detailItem?.audio_path || route.view !== 'detail') {
+      if (!detailItem || route.view !== 'detail') {
+        setAudioSrc('')
+        return
+      }
+      if (detailMode !== 'listener') {
+        setAudioSrc('')
+        return
+      }
+      const path =
+        storyTab === 'summary' ? detailItem.audio_path : (storyAudioState[storyTab]?.audio_path || detailItem.story_audio?.[storyTab]?.audio_path || '')
+      if (!path) {
         setAudioSrc('')
         return
       }
       try {
-        const blob = await fetchProtectedBlob(detailItem.audio_path)
+        const blob = await fetchProtectedBlob(path)
         if (cancelled) return
         objectUrl = URL.createObjectURL(blob)
         setAudioSrc(objectUrl)
@@ -850,7 +962,7 @@ export default function App() {
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [detailItem?.audio_path, route.view])
+  }, [detailItem, detailMode, route.view, storyAudioState, storyTab])
 
   useEffect(() => {
     if (route.view !== 'detail' || activeLyricIndex < 0) return
@@ -858,6 +970,16 @@ export default function App() {
     if (!el) return
     el.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [activeLyricIndex, route.view])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.pause()
+    audio.currentTime = 0
+    setPlayheadSeconds(0)
+    setAudioDuration(0)
+    setAudioPlaying(false)
+  }, [detailMode, storyTab, detailItem?.id])
 
   function scrollWallNext(button: HTMLButtonElement) {
     const rail = wallRailRef.current
@@ -1304,6 +1426,29 @@ export default function App() {
     void audio.play().catch(() => {
       // Ignore autoplay constraints if the browser blocks programmatic playback.
     })
+  }
+
+  function seekToPlayback(seconds: number) {
+    const audio = audioRef.current
+    if (!audio) return
+    const max = audioDuration > 0 ? audioDuration : Number.POSITIVE_INFINITY
+    const clamped = Math.max(0, Math.min(seconds, max))
+    audio.currentTime = clamped
+    setPlayheadSeconds(clamped)
+  }
+
+  async function toggleListenerPlayback() {
+    const audio = audioRef.current
+    if (!audio || !audioSrc) return
+    if (audio.paused) {
+      try {
+        await audio.play()
+      } catch {
+        // Ignore autoplay constraints if browser blocks playback.
+      }
+      return
+    }
+    audio.pause()
   }
 
   if (!authReady) {
@@ -2158,138 +2303,213 @@ export default function App() {
                   ) : null}
                 </div>
 
-                <section className="detail-block">
-                  <h3>Cover Photo</h3>
-                  {detailItem.cover_path ? (
-                    <img
-                      src={toAssetUrl(`/covers/${detailItem.id}.svg?v=${encodeURIComponent(detailItem.updated_at || '')}`)}
-                      alt={`${detailItem.title} cover`}
-                      className="detail-cover"
-                    />
-                  ) : (
-                    <div className="detail-cover placeholder">Cover photo not available yet.</div>
-                  )}
-                </section>
-
-                <section className="detail-block detail-story-tabs">
-                  <div className="story-tabs" role="tablist" aria-label="Story versions">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={storyTab === 'summary'}
-                      aria-controls="story-panel-summary"
-                      id="story-tab-summary"
-                      className={`story-tab ${storyTab === 'summary' ? 'active' : ''}`}
-                      onClick={() => setStoryTab('summary')}
-                    >
-                      Book-Style AI Summary
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={storyTab === 'children'}
-                      aria-controls="story-panel-children"
-                      id="story-tab-children"
-                      className={`story-tab ${storyTab === 'children' ? 'active' : ''}`}
-                      onClick={() => setStoryTab('children')}
-                    >
-                      Children&apos;s Version
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={storyTab === 'narration'}
-                      aria-controls="story-panel-narration"
-                      id="story-tab-narration"
-                      className={`story-tab ${storyTab === 'narration' ? 'active' : ''}`}
-                      onClick={() => setStoryTab('narration')}
-                    >
-                      Documentary Narration
-                    </button>
-                  </div>
-                  <div
-                    id="story-panel-summary"
-                    role="tabpanel"
-                    aria-labelledby="story-tab-summary"
-                    hidden={storyTab !== 'summary'}
-                    className="story-tab-panel"
-                  >
-                    <p className="detail-summary">
-                      {detailItem.ai_summary || 'AI summary not generated yet.'}
-                    </p>
-                  </div>
-                  <div
-                    id="story-panel-children"
-                    role="tabpanel"
-                    aria-labelledby="story-tab-children"
-                    hidden={storyTab !== 'children'}
-                    className="story-tab-panel"
-                  >
-                    <p className="detail-summary">
-                      {detailItem.story_children || 'Children version not generated yet.'}
-                    </p>
-                  </div>
-                  <div
-                    id="story-panel-narration"
-                    role="tabpanel"
-                    aria-labelledby="story-tab-narration"
-                    hidden={storyTab !== 'narration'}
-                    className="story-tab-panel"
-                  >
-                    <p className="detail-summary">
-                      {detailItem.story_narration || 'Narration version not generated yet.'}
-                    </p>
-                  </div>
-                </section>
-
-                <section className="detail-block">
-                  <h3>Play Audio</h3>
-                  <audio
-                    ref={audioRef}
-                    className="detail-audio"
-                    controls
-                    preload="metadata"
-                    src={audioSrc}
-                    onTimeUpdate={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
-                    onSeeked={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
-                    onLoadedMetadata={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
-                  >
-                    Your browser does not support the audio element.
-                  </audio>
-                </section>
-
-                <section className="detail-block">
-                  <h3>Live Transcript</h3>
-                  {lyricLines.length > 0 ? (
-                    <div className="lyrics-panel spring-scroll" role="list">
-                      {lyricLines.map((line, idx) => {
-                        const isActive = idx === activeLyricIndex
-                        const isPast = idx < activeLyricIndex
-                        const state = isActive ? 'active' : isPast ? 'past' : 'upcoming'
-                        return (
-                          <button
-                            key={`${line.start}-${idx}`}
-                            ref={(element) => {
-                              lyricLineRefs.current[idx] = element
-                            }}
-                            type="button"
-                            className={`lyric-line lyric-line-${state}`}
-                            onClick={() => seekToLyric(line.start)}
-                            role="listitem"
-                          >
-                            {isActive ? (
-                              <span className="lyric-line-time lyric-line-time-active">{formatTime(line.start)}</span>
-                            ) : null}
-                            <span className="lyric-line-text">{line.text}</span>
-                          </button>
-                        )
-                      })}
+                <section className="detail-block detail-mode-shell">
+                  <div className="detail-toolbar">
+                    <div className="detail-modes" role="tablist" aria-label="Record modes">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={detailMode === 'reader'}
+                        className={`detail-mode-tab ${detailMode === 'reader' ? 'active' : ''}`}
+                        onClick={() => setDetailMode('reader')}
+                      >
+                        Reader Mode
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={detailMode === 'listener'}
+                        className={`detail-mode-tab ${detailMode === 'listener' ? 'active' : ''}`}
+                        onClick={() => setDetailMode('listener')}
+                      >
+                        Listener Mode
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={detailMode === 'geek'}
+                        className={`detail-mode-tab ${detailMode === 'geek' ? 'active' : ''}`}
+                        onClick={() => setDetailMode('geek')}
+                      >
+                        Geek Mode
+                      </button>
                     </div>
-                  ) : (
-                    <p className="detail-transcript-fallback">
-                      {detailItem.transcript || 'Transcript not available yet. Save and transcribe this recording first.'}
-                    </p>
-                  )}
+                    {detailMode === 'reader' ? (
+                      <div className="detail-versions" role="tablist" aria-label="Reader versions">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={readerVersion === 'narration'}
+                          className={`detail-mode-tab ${readerVersion === 'narration' ? 'active' : ''}`}
+                          onClick={() => setReaderVersion('narration')}
+                        >
+                          Narration Style
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={readerVersion === 'summary'}
+                          className={`detail-mode-tab ${readerVersion === 'summary' ? 'active' : ''}`}
+                          onClick={() => setReaderVersion('summary')}
+                        >
+                          AI Summary
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={readerVersion === 'original'}
+                          className={`detail-mode-tab ${readerVersion === 'original' ? 'active' : ''}`}
+                          onClick={() => setReaderVersion('original')}
+                        >
+                          Original
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={readerVersion === 'children'}
+                          className={`detail-mode-tab ${readerVersion === 'children' ? 'active' : ''}`}
+                          onClick={() => setReaderVersion('children')}
+                        >
+                          Children
+                        </button>
+                      </div>
+                    ) : detailMode === 'listener' ? (
+                      <div className="detail-versions" role="tablist" aria-label="Listener versions">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={storyTab === 'summary'}
+                          className={`detail-mode-tab ${storyTab === 'summary' ? 'active' : ''}`}
+                          onClick={() => setStoryTab('summary')}
+                        >
+                          Original Recording
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={storyTab === 'children'}
+                          className={`detail-mode-tab ${storyTab === 'children' ? 'active' : ''}`}
+                          onClick={() => setStoryTab('children')}
+                        >
+                          Children&apos;s Narration
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={storyTab === 'narration'}
+                          className={`detail-mode-tab ${storyTab === 'narration' ? 'active' : ''}`}
+                          onClick={() => setStoryTab('narration')}
+                        >
+                          Documentary Narration
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="open-book">
+                    <article className="book-page book-page-cover">
+                      {detailItem.cover_path ? (
+                        <img
+                          src={toAssetUrl(`/covers/${detailItem.id}.svg?v=${encodeURIComponent(detailItem.updated_at || '')}`)}
+                          alt={`${detailItem.title} cover`}
+                          className="detail-cover"
+                        />
+                      ) : (
+                        <div className="detail-cover placeholder">Cover photo not available yet.</div>
+                      )}
+                    </article>
+                    <article className={`book-page book-page-content ${detailMode === 'listener' ? 'book-page-content-listener' : ''}`}>
+                      {detailMode === 'listener' ? (
+                        <div className="book-listener-content">
+                          <h3>{bookRightTitle}</h3>
+                          {lyricLines.length > 0 ? (
+                            <div className="lyrics-panel spring-scroll" role="list">
+                              {lyricLines.map((line, idx) => {
+                                const isActive = idx === activeLyricIndex
+                                const isPast = idx < activeLyricIndex
+                                const state = isActive ? 'active' : isPast ? 'past' : 'upcoming'
+                                return (
+                                  <button
+                                    key={`${line.start}-${idx}`}
+                                    ref={(element) => {
+                                      lyricLineRefs.current[idx] = element
+                                    }}
+                                    type="button"
+                                    className={`lyric-line lyric-line-${state}`}
+                                    onClick={() => seekToLyric(line.start)}
+                                    role="listitem"
+                                  >
+                                    <span className="lyric-line-text">{line.text}</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          ) : (
+                            <p className="detail-transcript-fallback">
+                              {activeTranscriptText ||
+                                'Transcript for this selected listener version is not available yet.'}
+                            </p>
+                          )}
+                          <div className="listener-now-playing">
+                            <input
+                              className="listener-seek-line"
+                              type="range"
+                              min={0}
+                              max={Math.max(audioDuration, 0)}
+                              step={0.1}
+                              value={Math.min(playheadSeconds, audioDuration || playheadSeconds)}
+                              onChange={(event) => seekToPlayback(Number(event.target.value))}
+                              disabled={!audioSrc || audioDuration <= 0}
+                              aria-label="Seek recording position"
+                            />
+                            <button
+                              type="button"
+                              className="listener-play-toggle"
+                              onClick={() => void toggleListenerPlayback()}
+                              disabled={!audioSrc}
+                              aria-label={audioPlaying ? 'Pause audio' : 'Play audio'}
+                            >
+                              <span aria-hidden="true" className="listener-play-icon">
+                                {audioPlaying ? '❚❚' : '▶'}
+                              </span>
+                            </button>
+                            <audio
+                              ref={audioRef}
+                              className="listener-audio-native"
+                              preload="metadata"
+                              src={audioSrc}
+                              onTimeUpdate={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
+                              onSeeked={(event) => setPlayheadSeconds(event.currentTarget.currentTime)}
+                              onLoadedMetadata={(event) => {
+                                setPlayheadSeconds(event.currentTarget.currentTime)
+                                setAudioDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)
+                              }}
+                              onDurationChange={(event) =>
+                                setAudioDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)
+                              }
+                              onPlay={() => setAudioPlaying(true)}
+                              onPause={() => setAudioPlaying(false)}
+                              onEnded={() => setAudioPlaying(false)}
+                            >
+                              Your browser does not support the audio element.
+                            </audio>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <h3>{bookRightTitle}</h3>
+                          <p className="book-page-text">{bookRightBody}</p>
+                        </>
+                      )}
+                    </article>
+                  </div>
+
+                  {detailMode === 'geek' ? (
+                    <section className="detail-block geek-placeholder">
+                      <h3>Geek Mode</h3>
+                      <p className="meta">Placeholder. Advanced timeline/debug controls coming next.</p>
+                    </section>
+                  ) : null}
                 </section>
               </>
             ) : (
