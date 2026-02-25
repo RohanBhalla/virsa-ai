@@ -582,6 +582,17 @@ p {
   gap: 0.55rem;
 }
 
+.speaker-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.speaker-field .speaker-select {
+  appearance: auto;
+  cursor: pointer;
+}
+
 .record-form-actions {
   display: flex;
   justify-content: center;

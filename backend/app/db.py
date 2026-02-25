@@ -94,6 +94,7 @@ def memory_to_response(memory: dict[str, Any]) -> dict[str, Any]:
 
     transcript_timing = _safe_list(memory.get("transcript_timing"))
     mood_tag = _safe_str(memory.get("mood_tag"))
+    themes = _safe_list(memory.get("themes"))
     ai_summary = _safe_str(memory.get("ai_summary"))
     ai_summary_status = _safe_str(memory.get("ai_summary_status"))
 
@@ -110,6 +111,7 @@ def memory_to_response(memory: dict[str, Any]) -> dict[str, Any]:
         "story_narration": _safe_str(memory.get("story_narration")),
         "cover_path": _safe_str(memory.get("cover_path")),
         "mood_tag": mood_tag,
+        "themes": themes,
         "ai_summary": ai_summary,
         "ai_summary_status": ai_summary_status,
         "embedding_status": memory.get("embedding_status") or {

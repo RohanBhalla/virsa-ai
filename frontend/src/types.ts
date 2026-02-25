@@ -16,6 +16,8 @@ export type Memory = {
   ai_summary: string
   ai_summary_status: string
   cover_path: string
+  mood_tag?: string
+  themes?: string[]
   created_at: string
   updated_at: string
 }

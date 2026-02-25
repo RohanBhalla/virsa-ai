@@ -6,6 +6,7 @@ import {
   generateCover,
   generateStory,
   getMe,
+  getSpeakers,
   listMemories,
   login,
   logout,
@@ -229,6 +230,8 @@ export default function App() {
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
   const [draftSpeaker, setDraftSpeaker] = useState('')
+  const [existingSpeakers, setExistingSpeakers] = useState<string[]>([])
+  const [speakerSelectValue, setSpeakerSelectValue] = useState<string>('')
   const [recordStatus, setRecordStatus] = useState('')
   const [recordError, setRecordError] = useState('')
   const [isSavingRecord, setIsSavingRecord] = useState(false)
@@ -414,6 +417,21 @@ export default function App() {
   }, [route.view])
 
   useEffect(() => {
+    if (!recordedBlob || !authUser) return
+    let cancelled = false
+    getSpeakers()
+      .then((speakers) => {
+        if (!cancelled) setExistingSpeakers(speakers)
+      })
+      .catch(() => {
+        if (!cancelled) setExistingSpeakers([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [recordedBlob, authUser])
+
+  useEffect(() => {
     if (!profileMenuOpen) return
     const onMouseDown = (event: MouseEvent) => {
       const target = event.target as Node
@@ -505,7 +523,10 @@ export default function App() {
     () => [...memories].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 8),
     [memories],
   )
-  const canSaveRecording = !!recordedBlob && !!draftTitle.trim() && !!draftSpeaker.trim() && !isSavingRecord
+  const currentSpeakerName =
+    speakerSelectValue === '__new__' ? draftSpeaker.trim() : (speakerSelectValue || '')
+  const canSaveRecording =
+    !!recordedBlob && !!draftTitle.trim() && !!currentSpeakerName && !isSavingRecord
 
   const detailItem = route.view === 'detail' ? memories.find((m) => m.id === route.id) : undefined
   const lyricLines = useMemo(() => buildLyricLines(detailItem?.transcript_timing || []), [detailItem?.transcript_timing])
@@ -604,14 +625,14 @@ export default function App() {
   }
 
   async function saveRecordedMemory() {
-    if (!recordedBlob || !draftTitle.trim() || !draftSpeaker.trim()) return
+    if (!recordedBlob || !draftTitle.trim() || !currentSpeakerName) return
 
     setIsSavingRecord(true)
     setRecordError('')
 
     try {
       setRecordStatus('Saving recording...')
-      const created = await createMemory(recordedBlob, draftTitle.trim(), draftSpeaker.trim())
+      const created = await createMemory(recordedBlob, draftTitle.trim(), currentSpeakerName)
 
       setRecordStatus('Transcribing with ElevenLabs...')
       await transcribeMemory(created.id)
@@ -627,6 +648,7 @@ export default function App() {
       setRecordedBlob(null)
       setDraftTitle('')
       setDraftSpeaker('')
+      setSpeakerSelectValue('')
     } catch (err) {
       setRecordError(err instanceof Error ? err.message : 'Failed to save recording')
     } finally {
@@ -838,13 +860,32 @@ export default function App() {
                     value={draftTitle}
                     onChange={(e) => setDraftTitle(e.target.value)}
                   />
-                  <input
-                    type="text"
-                    className="title-input"
-                    placeholder="Speaker tag"
-                    value={draftSpeaker}
-                    onChange={(e) => setDraftSpeaker(e.target.value)}
-                  />
+                  <div className="speaker-field">
+                    <select
+                      className="title-input speaker-select"
+                      value={speakerSelectValue}
+                      onChange={(e) => setSpeakerSelectValue(e.target.value)}
+                      aria-label="Select speaker"
+                    >
+                      <option value="">Select speaker...</option>
+                      {existingSpeakers.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                      <option value="__new__">Add new speaker</option>
+                    </select>
+                    {speakerSelectValue === '__new__' ? (
+                      <input
+                        type="text"
+                        className="title-input speaker-input"
+                        placeholder="New speaker name"
+                        value={draftSpeaker}
+                        onChange={(e) => setDraftSpeaker(e.target.value)}
+                        aria-label="New speaker name"
+                      />
+                    ) : null}
+                  </div>
                 </div>
                 <div className="record-form-actions">
                   <button type="button" className="record-save-button" disabled={!canSaveRecording} onClick={saveRecordedMemory}>

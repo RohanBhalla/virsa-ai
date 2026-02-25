@@ -109,6 +109,7 @@ def main() -> None:
                 "story_narration": m["ai_summary"],
                 "cover_path": "",
                 "mood_tag": "unknown",
+                "themes": [],
                 "ai_summary": m["ai_summary"][:240],
                 "ai_summary_status": "generated_fallback",
                 "embedding_status": {

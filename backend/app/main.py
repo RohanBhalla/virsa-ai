@@ -43,6 +43,7 @@ from .services import (
     generate_story_variants,
     generate_cover_svg,
     infer_mood_tag,
+    infer_themes,
     transcribe_with_elevenlabs,
 )
 
@@ -280,6 +281,7 @@ async def create_memory(
             "story_narration": "",
             "cover_path": "",
             "mood_tag": "unknown",
+            "themes": [],
             "ai_summary": "",
             "ai_summary_status": "pending",
             "embedding_status": {
@@ -307,6 +309,15 @@ async def create_memory(
 def list_memories(user: dict = Depends(get_current_user)) -> dict:
     rows = list(memories_collection().find({"user_id": _user_id(user)}, {"_id": 0}).sort("created_at", -1))
     return {"items": [memory_to_response(row) for row in rows]}
+
+
+@app.get("/api/speakers")
+def list_speakers(user: dict = Depends(get_current_user)) -> dict:
+    """Return distinct speaker_tag values from the current user's memories (non-empty, sorted)."""
+    user_id = _user_id(user)
+    raw = memories_collection().distinct("speaker_tag", {"user_id": user_id})
+    speakers = sorted(s for s in raw if isinstance(s, str) and s.strip())
+    return {"speakers": speakers}
 
 
 async def _search_request_body(request: Request) -> tuple[str, UploadFile | None]:
@@ -439,6 +450,7 @@ async def transcribe_memory(memory_id: str, user: dict = Depends(get_current_use
 
     chunk_count, embedding_model = index_transcript(memory_id, transcript, _user_id(user))
     mood_tag = infer_mood_tag(transcript)
+    themes = infer_themes(transcript)
 
     memories_collection().update_one(
         {"id": memory_id, "user_id": _user_id(user)},
@@ -448,6 +460,7 @@ async def transcribe_memory(memory_id: str, user: dict = Depends(get_current_use
                 "transcript_timing": transcript_timing,
                 "audio.local_path": str(audio_path),
                 "mood_tag": mood_tag,
+                "themes": themes,
                 "embedding_status": {
                     "indexed": chunk_count > 0,
                     "chunk_count": chunk_count,
@@ -464,6 +477,7 @@ async def transcribe_memory(memory_id: str, user: dict = Depends(get_current_use
         "transcript": transcript,
         "transcript_timing": transcript_timing,
         "mood_tag": mood_tag,
+        "themes": themes,
         "chunks_indexed": chunk_count,
         "embedding_model": embedding_model,
     }

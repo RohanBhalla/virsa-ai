@@ -13,8 +13,6 @@ from .config import (
     ELEVENLABS_API_KEY,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_STT_URL,
-    SENTIMENT_API_KEY,
-    SENTIMENT_API_URL,
     VERTEX_ACCESS_TOKEN,
     VERTEX_API_KEY,
     VERTEX_GENERATIVE_BASE_URL,
@@ -22,6 +20,7 @@ from .config import (
     VERTEX_PROJECT_ID,
     VERTEX_STORY_MODEL,
 )
+from .tag_options import MOOD_DEFAULT, MOOD_OPTIONS, THEMES_OPTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -288,43 +287,130 @@ def generate_cover_svg(memory_id: str, title: str, prompt: str) -> str:
     return str(cover_path)
 
 
-def _heuristic_mood_tag(text: str) -> str:
-    t = text.lower()
-    positive = ("love", "happy", "joy", "grateful", "celebrate", "laugh")
-    negative = ("sad", "loss", "cry", "hurt", "angry", "afraid")
-    p = sum(1 for w in positive if w in t)
-    n = sum(1 for w in negative if w in t)
-    if p > n:
-        return "positive"
-    if n > p:
-        return "somber"
-    return "reflective"
+def _vertex_generate_json(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    temperature: float = 0.2,
+) -> dict | None:
+    """Call Vertex Gemini generateContent; return parsed JSON dict or None."""
+    if not VERTEX_PROJECT_ID or (not VERTEX_API_KEY and not VERTEX_ACCESS_TOKEN):
+        return None
+
+    endpoint = (
+        VERTEX_GENERATIVE_BASE_URL.rstrip("/")
+        if VERTEX_GENERATIVE_BASE_URL
+        else f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com"
+    )
+    model = VERTEX_STORY_MODEL
+    model_path = (
+        model
+        if model.startswith("publishers/google/models/")
+        else f"publishers/google/models/{model}"
+    )
+    url = f"{endpoint}/v1/projects/{VERTEX_PROJECT_ID}/locations/{VERTEX_LOCATION}/{model_path}:generateContent"
+
+    headers = {"Content-Type": "application/json"}
+    if VERTEX_API_KEY:
+        headers["x-goog-api-key"] = VERTEX_API_KEY
+    if VERTEX_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {VERTEX_ACCESS_TOKEN}"
+
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(url, params=None, headers=headers, json=payload)
+        response.raise_for_status()
+    except Exception:
+        logger.exception("Vertex generateContent failed")
+        return None
+
+    body = response.json()
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    first = candidates[0]
+    content = first.get("content") if isinstance(first, dict) else None
+    parts = content.get("parts") if isinstance(content, dict) else None
+    if not isinstance(parts, list) or not parts:
+        return None
+    text = parts[0].get("text") if isinstance(parts[0], dict) else None
+    if not isinstance(text, str):
+        return None
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _vertex_mood_tag(transcript: str) -> str | None:
+    """Use Vertex to classify mood; return one of MOOD_OPTIONS or None."""
+    text = (transcript or "").strip()
+    if not text:
+        return None
+    transcript_seed = textwrap.shorten(text, width=3600, placeholder="...")
+    mood_list = ", ".join(MOOD_OPTIONS)
+    system_prompt = (
+        f"You are a sentiment classifier. Given a memory transcript, choose exactly one mood from this list: {mood_list}. "
+        'Respond with valid JSON only: {"mood": "<one of the options>"}.'
+    )
+    user_prompt = f"Transcript:\n{transcript_seed}"
+    result = _vertex_generate_json(system_prompt, user_prompt, temperature=0.2)
+    if not result:
+        return None
+    mood = result.get("mood")
+    if isinstance(mood, str):
+        mood = mood.strip().lower()
+        if mood in MOOD_OPTIONS:
+            return mood
+    return None
 
 
 def infer_mood_tag(transcript: str) -> str:
+    """Set mood_tag from defined list; LLM only, default when Vertex unavailable."""
+    mood = _vertex_mood_tag(transcript)
+    return mood if mood else MOOD_DEFAULT
+
+
+def _vertex_themes(transcript: str) -> list[str]:
+    """Use Vertex to extract themes; return list of THEMES_OPTIONS only."""
     text = (transcript or "").strip()
     if not text:
-        return "neutral"
+        return []
+    transcript_seed = textwrap.shorten(text, width=3600, placeholder="...")
+    themes_list = ", ".join(THEMES_OPTIONS)
+    system_prompt = (
+        f"From this memory transcript, select all themes that apply from this list: {themes_list}. "
+        'Return valid JSON only: {"themes": ["theme1", "theme2", ...]}. Only themes from the list are valid.'
+    )
+    user_prompt = f"Transcript:\n{transcript_seed}"
+    result = _vertex_generate_json(system_prompt, user_prompt, temperature=0.2)
+    if not result:
+        return []
+    raw = result.get("themes")
+    if not isinstance(raw, list):
+        return []
+    allowed = set(THEMES_OPTIONS)
+    return [
+        t.strip().lower()
+        for t in raw
+        if isinstance(t, str) and t.strip().lower() in allowed
+    ]
 
-    if not SENTIMENT_API_URL:
-        return _heuristic_mood_tag(text)
 
-    headers = {"Content-Type": "application/json"}
-    if SENTIMENT_API_KEY:
-        headers["Authorization"] = f"Bearer {SENTIMENT_API_KEY}"
-
-    payload = {"text": text}
-
+def infer_themes(transcript: str) -> list[str]:
+    """Set themes from defined list; Vertex with fallback to []."""
     try:
-        with httpx.Client(timeout=20) as client:
-            res = client.post(SENTIMENT_API_URL, json=payload, headers=headers)
-        if res.status_code >= 400:
-            return _heuristic_mood_tag(text)
-        body = res.json()
-        mood = body.get("mood") or body.get("label") or body.get("sentiment")
-        if isinstance(mood, str) and mood.strip():
-            return mood.strip().lower()
+        return _vertex_themes(transcript)
     except Exception:
-        return _heuristic_mood_tag(text)
-
-    return _heuristic_mood_tag(text)
+        logger.exception("infer_themes failed")
+        return []
