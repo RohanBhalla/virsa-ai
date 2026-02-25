@@ -38,3 +38,19 @@ export type AuthResponse = {
   access_token_expires_in: number
   refresh_token_expires_in: number
 }
+
+export type MemoryGraphEdge = {
+  source: string
+  target: string
+  score: number
+}
+
+export type MemoryGraph = {
+  nodes: Memory[]
+  edges: MemoryGraphEdge[]
+}
+
+export type RelatedMemoryItem = {
+  memory: Memory
+  score: number
+}

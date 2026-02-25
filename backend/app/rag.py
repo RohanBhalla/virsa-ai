@@ -335,3 +335,129 @@ def retrieve(memory_id: str, query: str, top_k: int = 4) -> list[str]:
 
 def join_context(chunks: Iterable[str]) -> str:
     return "\n\n".join(chunks)
+
+
+def _score_from_item(item: dict) -> float:
+    raw = item.get("score")
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        pass
+    if hasattr(raw, "to_decimal"):
+        return float(raw.to_decimal())
+    return 0.0
+
+
+def get_memory_centroid(memory_id: str) -> list[float] | None:
+    """Return the mean of all chunk embeddings for a memory, or None if no chunks."""
+    col = chunks_collection()
+    rows = list(col.find({"memory_id": memory_id}, {"_id": 0, "embedding": 1}))
+    if not rows:
+        return None
+    embeddings = [r["embedding"] for r in rows if isinstance(r.get("embedding"), list)]
+    if not embeddings:
+        return None
+    dim = len(embeddings[0])
+    centroid = [0.0] * dim
+    for vec in embeddings:
+        if len(vec) != dim:
+            continue
+        for i in range(dim):
+            centroid[i] += float(vec[i])
+    n = len(embeddings)
+    centroid = [c / n for c in centroid]
+    norm = sum(c * c for c in centroid) ** 0.5
+    if norm > 0:
+        centroid = [c / norm for c in centroid]
+    return centroid
+
+
+def _vector_search_by_vector(
+    user_id: str,
+    query_vector: list[float],
+    limit: int = 300,
+    exclude_memory_id: str | None = None,
+) -> list[dict]:
+    """Run Atlas $vectorSearch with query_vector; post-filter by user_id. Returns list of {memory_id, score, content}."""
+    col = chunks_collection()
+    num_candidates = max(500, limit * 2)
+    pipeline = [
+        {
+            "$vectorSearch": {
+                "index": MONGODB_VECTOR_INDEX,
+                "path": "embedding",
+                "queryVector": query_vector,
+                "numCandidates": num_candidates,
+                "limit": limit,
+            }
+        },
+        {"$match": {"user_id": user_id}},
+        {"$project": {"_id": 0, "memory_id": 1, "content": 1, "score": {"$meta": "vectorSearchScore"}}},
+    ]
+    try:
+        rows = list(col.aggregate(pipeline))
+    except OperationFailure:
+        return []
+    if exclude_memory_id:
+        rows = [r for r in rows if r.get("memory_id") != exclude_memory_id]
+    return rows
+
+
+def find_related_memories(
+    user_id: str, memory_id: str, top_k: int = 10
+) -> list[tuple[str, float]]:
+    """Return memories similar to the given memory: [(memory_id, score), ...]."""
+    centroid = get_memory_centroid(memory_id)
+    if not centroid:
+        return []
+    rows = _vector_search_by_vector(
+        user_id, centroid, limit=top_k * 5, exclude_memory_id=memory_id
+    )
+    seen: dict[str, float] = {}
+    for item in rows:
+        mid = item.get("memory_id")
+        if not mid:
+            continue
+        score = _score_from_item(item)
+        if mid not in seen or score > seen[mid]:
+            seen[mid] = score
+    result = [(mid, sc) for mid, sc in seen.items()]
+    result.sort(key=lambda x: -x[1])
+    return result[:top_k]
+
+
+def get_graph_edges(
+    user_id: str,
+    memory_ids: list[str],
+    top_k_per_node: int = 5,
+    min_score: float | None = None,
+) -> list[tuple[str, str, float]]:
+    """Return list of (source_id, target_id, score) for the graph. Self-edges excluded; only edges between nodes in memory_ids; deduped (unordered pair)."""
+    id_set = set(memory_ids)
+    edges_set: dict[tuple[str, str], float] = {}
+    for memory_id in memory_ids:
+        centroid = get_memory_centroid(memory_id)
+        if not centroid:
+            continue
+        rows = _vector_search_by_vector(
+            user_id, centroid, limit=top_k_per_node + 5, exclude_memory_id=memory_id
+        )
+        seen: dict[str, float] = {}
+        for item in rows:
+            mid = item.get("memory_id")
+            if not mid or mid == memory_id or mid not in id_set:
+                continue
+            score = _score_from_item(item)
+            if mid not in seen or score > seen[mid]:
+                seen[mid] = score
+        for target_id, score in sorted(seen.items(), key=lambda x: -x[1])[:top_k_per_node]:
+            if min_score is not None and score < min_score:
+                continue
+            pair = (memory_id, target_id) if memory_id < target_id else (target_id, memory_id)
+            if pair not in edges_set or score > edges_set[pair]:
+                edges_set[pair] = score
+    return [(a, b, s) for (a, b), s in edges_set.items()]

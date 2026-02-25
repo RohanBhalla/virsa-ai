@@ -38,7 +38,14 @@ from .db import (
     users_collection,
     get_db,
 )
-from .rag import index_transcript, join_context, retrieve, search_stories
+from .rag import (
+    find_related_memories,
+    get_graph_edges,
+    index_transcript,
+    join_context,
+    retrieve,
+    search_stories,
+)
 from .services import (
     generate_story_variants,
     generate_cover_svg,
@@ -309,6 +316,62 @@ async def create_memory(
 def list_memories(user: dict = Depends(get_current_user)) -> dict:
     rows = list(memories_collection().find({"user_id": _user_id(user)}, {"_id": 0}).sort("created_at", -1))
     return {"items": [memory_to_response(row) for row in rows]}
+
+
+@app.get("/api/memories/graph")
+def get_memory_graph(
+    theme: str | None = None,
+    limit: int = 100,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Return nodes (memories) and edges (similarity pairs) for the Memory Map graph."""
+    user_id = _user_id(user)
+    query: dict = {"user_id": user_id}
+    if theme and theme.strip():
+        query["themes"] = theme.strip()
+    rows = list(
+        memories_collection()
+        .find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    nodes = [memory_to_response(r) for r in rows]
+    memory_ids = [r["id"] for r in rows if r.get("id")]
+    edges_tuples = get_graph_edges(user_id, memory_ids, top_k_per_node=5)
+    edges = [
+        {"source": a, "target": b, "score": round(s, 4)}
+        for a, b, s in edges_tuples
+    ]
+    return {"nodes": nodes, "edges": edges}
+
+
+@app.get("/api/memories/{memory_id}/related")
+def get_related_memories(
+    memory_id: str,
+    top_k: int = 10,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Return memories similar to the given one, with scores."""
+    user_id = _user_id(user)
+    _owned_memory_or_404(memory_id, user_id)
+    related = find_related_memories(user_id, memory_id, top_k=top_k)
+    if not related:
+        return {"items": []}
+    ids = [mid for mid, _ in related]
+    scores_by_id = {mid: sc for mid, sc in related}
+    rows = list(
+        memories_collection().find(
+            {"id": {"$in": ids}, "user_id": user_id},
+            {"_id": 0},
+        )
+    )
+    by_id = {r["id"]: r for r in rows}
+    items = [
+        {"memory": memory_to_response(by_id[mid]), "score": round(scores_by_id[mid], 4)}
+        for mid in ids
+        if mid in by_id
+    ]
+    return {"items": items}
 
 
 @app.get("/api/speakers")

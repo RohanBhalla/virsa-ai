@@ -454,6 +454,162 @@ p {
   align-content: center;
 }
 
+.memory-map-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 60vh;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.memory-map-loading,
+.memory-map-error,
+.memory-map-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  min-height: 200px;
+  padding: 2rem;
+}
+
+.memory-map-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+}
+
+.memory-map-theme-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  color: rgba(24, 21, 18, 0.8);
+}
+
+.memory-map-theme-select {
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+}
+
+.memory-map-graph-wrap {
+  width: 100%;
+  max-width: 100%;
+  height: 400px;
+  min-height: 300px;
+  min-width: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  position: relative;
+}
+
+.memory-map-graph-wrap canvas {
+  display: block;
+  max-width: 100%;
+}
+
+.memory-map-sidebar {
+  margin-top: 0.5rem;
+  padding: 1rem;
+}
+
+.memory-map-related h3,
+.memory-map-trail h3 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem 0;
+  color: rgba(24, 21, 18, 0.85);
+}
+
+.memory-map-related-list,
+.memory-map-trail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.memory-map-related-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.memory-map-related-item:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.memory-map-related-cover {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.memory-map-related-cover.placeholder {
+  background: rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.memory-map-related-title {
+  flex: 1;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-map-related-score {
+  font-size: 0.75rem;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.memory-map-trail-btn {
+  margin-left: auto;
+}
+
+.memory-map-trail-list {
+  counter-reset: trail;
+}
+
+.memory-map-trail-item {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.9rem;
+  color: rgba(24, 21, 18, 0.85);
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+
+.memory-map-trail-item:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
 .recorder {
   display: grid;
   justify-items: center;
@@ -1264,7 +1420,7 @@ p {
   border-radius: 999px;
   padding: var(--pill-pad, 0.34rem);
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 0.3rem;
   backdrop-filter: blur(18px) saturate(1.25);
   -webkit-backdrop-filter: blur(18px) saturate(1.25);
@@ -1291,7 +1447,7 @@ p {
   top: 0.34rem;
   bottom: 0.34rem;
   left: 0.34rem;
-  width: calc(50% - 0.49rem);
+  width: calc(33.333% - 0.49rem);
   border-radius: 999px;
   background:
     linear-gradient(150deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.42));
@@ -1307,8 +1463,12 @@ p {
   transform: translateX(0);
 }
 
-.nav-indicator.is-record {
+.nav-indicator.is-memory-map {
   transform: translateX(100%);
+}
+
+.nav-indicator.is-record {
+  transform: translateX(200%);
 }
 
 .bottom-nav button {

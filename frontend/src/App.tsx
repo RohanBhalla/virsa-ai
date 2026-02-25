@@ -18,11 +18,12 @@ import {
   toAssetUrl,
   transcribeMemory,
 } from './api'
+import { MemoryMapView } from './components/MemoryMapView'
 import { Recorder } from './components/Recorder'
 import virasatLogo from './assets/virasat-logo.png'
 import type { Memory, TranscriptWord, User } from './types'
 
-type View = 'home' | 'record' | 'detail' | 'account'
+type View = 'home' | 'record' | 'detail' | 'account' | 'memory-map'
 type AuthMode = 'login' | 'signup'
 
 const ACCESS_TOKEN_KEY = 'virsa_access_token'
@@ -32,6 +33,7 @@ function parseHash(): { view: View; id?: string } {
   const hash = window.location.hash.replace(/^#/, '')
   if (!hash || hash === '/') return { view: 'home' }
   if (hash === '/record') return { view: 'record' }
+  if (hash === '/memory-map') return { view: 'memory-map' }
   if (hash === '/account') return { view: 'account' }
   if (hash.startsWith('/recordings/')) {
     const id = hash.split('/')[2]
@@ -906,6 +908,10 @@ export default function App() {
         </div>
       ) : null}
 
+      {route.view === 'memory-map' ? (
+        <MemoryMapView onNavigate={navigate} />
+      ) : null}
+
       {route.view === 'detail' ? (
         <div className="view-shell">
           <section className="panel recording-detail">
@@ -1093,8 +1099,18 @@ export default function App() {
 
       <div className="bottom-bar">
         <nav className="bottom-nav">
-          <span className={`nav-indicator ${route.view === 'record' ? 'is-record' : 'is-home'}`} />
+          <span
+            className={`nav-indicator ${
+              route.view === 'record' ? 'is-record' : route.view === 'memory-map' ? 'is-memory-map' : 'is-home'
+            }`}
+          />
           <button className={route.view === 'home' ? 'active' : ''} onClick={() => navigate('/')}>Home</button>
+          <button
+            className={route.view === 'memory-map' ? 'active' : ''}
+            onClick={() => navigate('/memory-map')}
+          >
+            Memory Map
+          </button>
           <button className={route.view === 'record' ? 'active' : ''} onClick={() => navigate('/record')}>Record</button>
         </nav>
         <button

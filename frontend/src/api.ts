@@ -1,4 +1,11 @@
-import type { AuthResponse, Memory, TranscriptWord, User } from './types'
+import type {
+  AuthResponse,
+  Memory,
+  MemoryGraph,
+  RelatedMemoryItem,
+  TranscriptWord,
+  User,
+} from './types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
 const ACCESS_TOKEN_KEY = 'virsa_access_token'
@@ -216,6 +223,29 @@ export async function searchStoriesWithAudio(audioBlob: Blob): Promise<SearchRes
     method: 'POST',
     body: fd,
   })
+}
+
+export async function getMemoryGraph(params?: {
+  theme?: string
+  limit?: number
+}): Promise<MemoryGraph> {
+  const sp = new URLSearchParams()
+  if (params?.theme != null && params.theme !== '') sp.set('theme', params.theme)
+  if (params?.limit != null) sp.set('limit', String(params.limit))
+  const qs = sp.toString()
+  return fetchJson<MemoryGraph>(`/api/memories/graph${qs ? `?${qs}` : ''}`)
+}
+
+export async function getRelatedMemories(
+  memoryId: string,
+  topK?: number
+): Promise<{ items: RelatedMemoryItem[] }> {
+  const sp = new URLSearchParams()
+  if (topK != null) sp.set('top_k', String(topK))
+  const qs = sp.toString()
+  return fetchJson<{ items: RelatedMemoryItem[] }>(
+    `/api/memories/${memoryId}/related${qs ? `?${qs}` : ''}`
+  )
 }
 
 export { API_BASE }
