@@ -14,7 +14,7 @@ type MemoryCardProps = {
 }
 
 export function MemoryCard({ item, busy, onTranscribe, onStory, onCover }: MemoryCardProps) {
-  const coverUrl = item.cover_path ? toAssetUrl(`/covers/${item.id}.svg`) : ''
+  const coverUrl = item.cover_path ? toAssetUrl(`/covers/${item.id}.svg?v=${encodeURIComponent(item.updated_at || '')}`) : ''
   const mood = item.mood_tag?.trim()
   const themes = item.themes?.length ? item.themes : []
 

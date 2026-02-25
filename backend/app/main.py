@@ -81,14 +81,21 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
-    # Ensure app loggers (e.g. search) emit at INFO to the console
+    # Ensure app loggers emit at INFO to the console.
     app_logger = logging.getLogger("app")
+    services_logger = logging.getLogger("app.services")
+    httpx_logger = logging.getLogger("httpx")
     app_logger.setLevel(logging.INFO)
+    services_logger.setLevel(logging.INFO)
+    httpx_logger.setLevel(logging.WARNING)
     if not app_logger.handlers:
         handler = logging.StreamHandler()
         handler.setLevel(logging.INFO)
         handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
         app_logger.addHandler(handler)
+    if not services_logger.handlers:
+        for handler in app_logger.handlers:
+            services_logger.addHandler(handler)
     init_db()
 
 
@@ -803,6 +810,7 @@ async def create_memory(
     audio: UploadFile = File(...),
     title: str = Form(default="Untitled Memory"),
     speaker_tag: str = Form(default=""),
+    speaker_person_id: str = Form(default=""),
     user: dict = Depends(get_current_user),
 ) -> dict:
     if not audio.filename:
@@ -833,14 +841,35 @@ async def create_memory(
 
     now = now_iso()
     clean_title = title.strip() or "Untitled Memory"
-    clean_speaker_tag = speaker_tag.strip()
     clean_user_id = _user_id(user)
+    clean_family_id = str(user.get("default_family_id") or "").strip()
+    clean_speaker_person_id = speaker_person_id.strip()
+    clean_speaker_tag = speaker_tag.strip()
+
+    if clean_speaker_person_id:
+        if clean_family_id:
+            speaker_person = _person_in_family_or_404(clean_user_id, clean_family_id, clean_speaker_person_id)
+        else:
+            speaker_person = family_people_collection().find_one(
+                {"owner_user_id": clean_user_id, "id": clean_speaker_person_id},
+                {"_id": 0},
+            )
+            if not speaker_person:
+                raise HTTPException(status_code=404, detail="Speaker not found in family")
+            clean_family_id = str(speaker_person.get("family_id") or "").strip()
+        clean_speaker_tag = str(speaker_person.get("display_name") or "").strip()
+        if not clean_speaker_tag:
+            raise HTTPException(status_code=400, detail="Selected family member has no display name")
+    elif not clean_speaker_tag:
+        raise HTTPException(status_code=400, detail="Select a family member as the speaker")
 
     memories_collection().insert_one(
         {
             "id": memory_id,
             "title": clean_title,
             "speaker_tag": clean_speaker_tag,
+            "speaker_person_id": clean_speaker_person_id,
+            "family_id": clean_family_id,
             "audio": {
                 "filename": audio.filename,
                 "mime_type": audio.content_type or "audio/webm",
@@ -872,6 +901,8 @@ async def create_memory(
         "id": memory_id,
         "title": clean_title,
         "speaker_tag": clean_speaker_tag,
+        "speaker_person_id": clean_speaker_person_id,
+        "family_id": clean_family_id,
         "audio_path": f"/api/memories/{memory_id}/audio",
         "audio_url": f"/api/memories/{memory_id}/audio",
     }
@@ -941,11 +972,36 @@ def get_related_memories(
 
 @app.get("/api/speakers")
 def list_speakers(user: dict = Depends(get_current_user)) -> dict:
-    """Return distinct speaker_tag values from the current user's memories (non-empty, sorted)."""
+    """Return family members as selectable speakers for recording."""
     user_id = _user_id(user)
-    raw = memories_collection().distinct("speaker_tag", {"user_id": user_id})
-    speakers = sorted(s for s in raw if isinstance(s, str) and s.strip())
-    return {"speakers": speakers}
+    family_id = str(user.get("default_family_id") or "").strip()
+    if not family_id:
+        elder = family_people_collection().find_one(
+            {"owner_user_id": user_id, "is_elder_root": True},
+            {"_id": 0, "family_id": 1},
+        )
+        family_id = str((elder or {}).get("family_id") or "").strip()
+    if not family_id:
+        return {"family_id": "", "speakers": []}
+
+    rows = list(
+        family_people_collection()
+        .find(
+            {"owner_user_id": user_id, "family_id": family_id},
+            {"_id": 0, "id": 1, "display_name": 1, "is_elder_root": 1},
+        )
+        .sort([("is_elder_root", -1), ("display_name", 1)])
+    )
+    speakers = [
+        {
+            "person_id": str(row.get("id") or ""),
+            "display_name": str(row.get("display_name") or ""),
+            "is_elder_root": bool(row.get("is_elder_root")),
+        }
+        for row in rows
+        if str(row.get("id") or "").strip() and str(row.get("display_name") or "").strip()
+    ]
+    return {"family_id": family_id, "speakers": speakers}
 
 
 async def _search_request_body(request: Request) -> tuple[str, UploadFile | None]:
@@ -1163,15 +1219,28 @@ def build_cover(
     prompt: str = Form(default="Warm family storybook illustration"),
     user: dict = Depends(get_current_user),
 ) -> dict:
-    row = _owned_memory_or_404(memory_id, _user_id(user), {"_id": 0, "title": 1})
-
-    cover_path = generate_cover_svg(memory_id, str(row.get("title") or "Untitled"), prompt)
-    memories_collection().update_one(
-        {"id": memory_id, "user_id": _user_id(user)},
-        {"$set": {"cover_path": cover_path, "updated_at": now_iso()}},
+    logger.info("api_cover_request memory_id=%s user_id=%s", memory_id, _user_id(user))
+    row = _owned_memory_or_404(
+        memory_id,
+        _user_id(user),
+        {"_id": 0, "title": 1, "ai_summary": 1, "story_children": 1, "story_narration": 1},
     )
 
-    return {"id": memory_id, "cover_url": f"/covers/{memory_id}.svg"}
+    cover_path, generation_status = generate_cover_svg(
+        memory_id,
+        str(row.get("title") or "Untitled"),
+        prompt,
+        str(row.get("ai_summary") or ""),
+        str(row.get("story_children") or ""),
+        str(row.get("story_narration") or ""),
+    )
+    memories_collection().update_one(
+        {"id": memory_id, "user_id": _user_id(user)},
+        {"$set": {"cover_path": cover_path, "cover_status": generation_status, "updated_at": now_iso()}},
+    )
+    logger.info("api_cover_result memory_id=%s status=%s", memory_id, generation_status)
+
+    return {"id": memory_id, "cover_url": f"/covers/{memory_id}.svg", "cover_status": generation_status}
 
 
 def _viewer_key(user_id: str | None, device_id: str | None) -> str:

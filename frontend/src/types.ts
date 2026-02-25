@@ -8,6 +8,8 @@ export type Memory = {
   id: string
   title: string
   speaker_tag: string
+  speaker_person_id?: string
+  family_id?: string
   audio_path: string
   transcript: string
   transcript_timing: TranscriptWord[]
@@ -16,6 +18,7 @@ export type Memory = {
   ai_summary: string
   ai_summary_status: string
   cover_path: string
+  cover_status?: string
   mood_tag?: string
   themes?: string[]
   created_at: string
@@ -50,6 +53,12 @@ export type MemoryGraphEdge = {
 export type MemoryGraph = {
   nodes: Memory[]
   edges: MemoryGraphEdge[]
+}
+
+export type FamilySpeaker = {
+  person_id: string
+  display_name: string
+  is_elder_root: boolean
 }
 
 export type RelatedMemoryItem = {

@@ -445,12 +445,12 @@ p {
 .recorder-panel {
   display: grid;
   place-items: center;
-  min-height: clamp(440px, 68vh, 740px);
-  padding: clamp(1.1rem, 3vh, 1.8rem);
+  min-height: clamp(380px, 61vh, 660px);
+  padding: clamp(0.9rem, 2.4vh, 1.4rem);
 }
 
 .record-view {
-  min-height: clamp(500px, 74vh, 820px);
+  min-height: clamp(440px, 68vh, 760px);
   align-content: center;
 }
 
@@ -619,7 +619,7 @@ p {
 }
 
 .record-button {
-  width: clamp(200px, 52vw, 290px);
+  width: clamp(170px, 44vw, 240px);
   aspect-ratio: 1;
   border-radius: 999px;
   display: grid;
@@ -674,6 +674,17 @@ p {
 
 .record-button:active {
   transform: scale(0.97);
+}
+
+.record-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  animation: none;
+}
+
+.record-button:disabled::before {
+  opacity: 0.2;
+  animation: none;
 }
 
 .record-button:focus-visible,
@@ -731,6 +742,27 @@ p {
   display: grid;
   gap: 0.7rem;
   margin-top: 0.2rem;
+}
+
+.record-prep-card {
+  width: min(100%, 620px);
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(30, 28, 26, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.record-prep-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.record-add-member-form {
+  display: grid;
+  gap: 0.5rem;
 }
 
 .record-form-fields {
@@ -1573,6 +1605,96 @@ p {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.72);
   overflow: hidden;
+  position: relative;
+}
+
+.family-graph-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0.7rem;
+  align-items: start;
+}
+
+.family-graph-side {
+  border: 1px solid rgba(30, 28, 26, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.family-graph-side h3,
+.family-graph-side h4 {
+  margin: 0;
+}
+
+.family-graph-member {
+  border: 1px solid rgba(30, 28, 26, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.family-graph-form {
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed rgba(30, 28, 26, 0.16);
+}
+
+.family-graph-action-choice {
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.3rem;
+  border-top: 1px dashed rgba(30, 28, 26, 0.16);
+}
+
+.family-graph-action-buttons {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.family-graph-choice-btn {
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 999px;
+  padding: 0.62rem 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: rgba(32, 24, 16, 0.82);
+  cursor: pointer;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.14)),
+    linear-gradient(165deg, rgba(186, 114, 6, 0.24), rgba(161, 94, 0, 0.14) 55%, rgba(129, 73, 0, 0.14) 100%);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  box-shadow:
+    0 8px 18px rgba(24, 20, 14, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -7px 14px rgba(255, 255, 255, 0.08);
+  transition: transform 180ms ease, box-shadow 180ms ease, color 180ms ease, background 180ms ease;
+}
+
+.family-graph-choice-btn:hover {
+  transform: translateY(-1px);
+  color: rgba(23, 17, 11, 0.92);
+  box-shadow:
+    0 12px 24px rgba(24, 20, 14, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    inset 0 -8px 16px rgba(255, 255, 255, 0.1);
+}
+
+.family-graph-choice-btn.active {
+  color: #ffffff;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.12)),
+    linear-gradient(165deg, rgba(186, 114, 6, 0.78), rgba(161, 94, 0, 0.56) 55%, rgba(129, 73, 0, 0.58) 100%);
+  box-shadow:
+    0 12px 24px rgba(24, 20, 14, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    inset 0 -8px 18px rgba(255, 255, 255, 0.1);
 }
 
 .family-graph-legend {
@@ -1682,9 +1804,10 @@ p {
 }
 
 .bottom-nav {
+  --nav-gap: 0.3rem;
   position: relative;
   overflow: hidden;
-  width: min(460px, 76vw);
+  width: min(560px, 88vw);
   background:
     linear-gradient(140deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.1)),
     linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06));
@@ -1693,7 +1816,7 @@ p {
   padding: var(--pill-pad, 0.34rem);
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 0.3rem;
+  gap: var(--nav-gap);
   backdrop-filter: blur(18px) saturate(1.25);
   -webkit-backdrop-filter: blur(18px) saturate(1.25);
   box-shadow:
@@ -1716,10 +1839,10 @@ p {
 
 .nav-indicator {
   position: absolute;
-  top: 0.34rem;
-  bottom: 0.34rem;
-  left: 0.34rem;
-  width: calc(25% - 0.52rem);
+  top: var(--pill-pad, 0.34rem);
+  bottom: var(--pill-pad, 0.34rem);
+  left: var(--pill-pad, 0.34rem);
+  width: calc((100% - (var(--pill-pad, 0.34rem) * 2) - (var(--nav-gap) * 3)) / 4);
   border-radius: 999px;
   background:
     linear-gradient(150deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.42));
@@ -1736,26 +1859,33 @@ p {
 }
 
 .nav-indicator.is-memory-map {
-  transform: translateX(200%);
+  transform: translateX(calc((100% + var(--nav-gap)) * 2));
 }
 
 .nav-indicator.is-family-tree {
-  transform: translateX(100%);
+  transform: translateX(calc(100% + var(--nav-gap)));
 }
 
 .nav-indicator.is-record {
-  transform: translateX(300%);
+  transform: translateX(calc((100% + var(--nav-gap)) * 3));
 }
 
 .bottom-nav button {
   position: relative;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: 999px;
-  padding: 0.66rem 0.9rem;
+  min-height: var(--pill-height, 2.75rem);
+  padding: 0 0.8rem;
   background: rgba(255, 255, 255, 0.08);
   color: rgba(24, 21, 18, 0.72);
   font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 180ms ease, color 180ms ease, transform 180ms ease;
 }
@@ -2171,6 +2301,10 @@ p {
 
   .family-graph-wrap {
     min-height: 56vh;
+  }
+
+  .family-graph-main {
+    grid-template-columns: 1fr;
   }
 
   .family-relation-item {

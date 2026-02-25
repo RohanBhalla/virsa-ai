@@ -1,5 +1,6 @@
 import type {
   AuthResponse,
+  FamilySpeaker,
   FamilyTree,
   Memory,
   MemoryGraph,
@@ -97,17 +98,24 @@ export async function listMemories(): Promise<Memory[]> {
   return data.items
 }
 
-export async function getSpeakers(): Promise<string[]> {
-  const data = await fetchJson<{ speakers: string[] }>('/api/speakers')
+export async function getSpeakers(): Promise<FamilySpeaker[]> {
+  const data = await fetchJson<{ family_id: string; speakers: FamilySpeaker[] }>('/api/speakers')
   return data.speakers
 }
 
-export async function createMemory(file: Blob, title: string, speakerTag: string): Promise<{ id: string }> {
+export async function createMemory(
+  file: Blob,
+  title: string,
+  speakerPersonId: string
+): Promise<{ id: string; speaker_tag: string; speaker_person_id: string; family_id: string }> {
   const fd = new FormData()
   fd.append('audio', file, 'memory.webm')
   fd.append('title', title)
-  fd.append('speaker_tag', speakerTag)
-  return fetchJson<{ id: string }>('/api/memories', { method: 'POST', body: fd })
+  fd.append('speaker_person_id', speakerPersonId)
+  return fetchJson<{ id: string; speaker_tag: string; speaker_person_id: string; family_id: string }>(
+    '/api/memories',
+    { method: 'POST', body: fd }
+  )
 }
 
 export async function transcribeMemory(id: string): Promise<{ transcript: string; transcript_timing: TranscriptWord[] }> {
@@ -138,10 +146,10 @@ export async function generateStory(
   })
 }
 
-export async function generateCover(id: string, prompt: string): Promise<{ cover_url: string }> {
+export async function generateCover(id: string, prompt: string): Promise<{ cover_url: string; cover_status?: string }> {
   const fd = new FormData()
   fd.append('prompt', prompt)
-  return fetchJson<{ cover_url: string }>(`/api/memories/${id}/cover`, {
+  return fetchJson<{ cover_url: string; cover_status?: string }>(`/api/memories/${id}/cover`, {
     method: 'POST',
     body: fd,
   })

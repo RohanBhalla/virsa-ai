@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
+import re
 import textwrap
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from .config import (
     ELEVENLABS_STT_URL,
     VERTEX_ACCESS_TOKEN,
     VERTEX_API_KEY,
+    VERTEX_COVER_MODEL,
     VERTEX_GENERATIVE_BASE_URL,
     VERTEX_LOCATION,
     VERTEX_PROJECT_ID,
@@ -256,13 +259,19 @@ def generate_story_variants(
     return _fallback_story_variants(transcript, context, title, speaker_tag), "generated_fallback"
 
 
-def generate_cover_svg(memory_id: str, title: str, prompt: str) -> str:
+def _normalize_hex_color(value: object, fallback: str) -> str:
+    if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value.strip()):
+        return value.strip().lower()
+    return fallback
+
+
+def _legacy_cover_svg(memory_id: str, title: str, prompt: str) -> str:
     digest = hashlib.sha256((memory_id + prompt + title).encode("utf-8")).hexdigest()
     c1 = f"#{digest[0:6]}"
     c2 = f"#{digest[6:12]}"
     c3 = f"#{digest[12:18]}"
 
-    safe_title = (title or "Untitled Story").replace("&", "and")[:48]
+    safe_title = html.escape((title or "Untitled Story").replace("&", "and")[:48])
 
     # Center title: one line, large bold sans-serif, reference book-cover style
     # Font: modern bold sans-serif; size scales down slightly for longer titles
@@ -288,11 +297,293 @@ def generate_cover_svg(memory_id: str, title: str, prompt: str) -> str:
     return str(cover_path)
 
 
+def _vertex_cover_direction(
+    title: str,
+    prompt: str,
+    ai_summary: str,
+    story_children: str,
+    story_narration: str,
+) -> dict[str, object] | None:
+    context = textwrap.shorten(
+        " ".join(part for part in (ai_summary, story_children, story_narration) if part),
+        width=1400,
+        placeholder="...",
+    )
+    system_prompt = (
+    "You are a senior visual art director for animated children's storybook covers. "
+    "Your job is to design a cinematic, Pixar-style animated book cover featuring the MAIN CHARACTER(S) from the story. "
+    "The cover must feel alive, expressive, emotional, and character-driven — not abstract or symbolic only. "
+
+    "Always include the actual protagonist(s) clearly described with: "
+    "age group, gender (if specified), clothing, hairstyle, facial expression, pose, and emotional tone. "
+    "The character must be the focal point of the composition. "
+    "Background elements should support the character and reflect the story setting. "
+
+    "Visual style guidelines: "
+    "3D animated look, soft global illumination, expressive eyes, dynamic pose, shallow depth of field, "
+    "storybook warmth, magical atmosphere, detailed textures, subtle motion cues. "
+
+    "Return STRICT JSON with fields: "
+    "palette_top, palette_mid, palette_bottom, accent, motif, motion, tagline, character_description, cover_scene. "
+
+    "Rules: "
+    "- All colors must be valid hex codes in #RRGGBB format. "
+    "- motif must be one of [moon, tree, lantern, kite, stars, home, river]. "
+    "- motion must be one of [drift, twinkle, pulse, sway]. "
+    "- tagline must be 6 words or fewer. "
+    "- character_description must be 1–3 vivid sentences describing the main character visually. "
+    "- cover_scene must be 2–4 sentences describing the full animated cover composition in rich detail."
+)
+    user_prompt = (
+        f"Title: {title or 'Untitled Story'}\n"
+        f"Prompt: {textwrap.shorten(prompt, width=360, placeholder='...')}\n"
+        f"Story context: {context or 'Family memory'}"
+    )
+    result = _vertex_generate_json(
+        system_prompt,
+        user_prompt,
+        temperature=0.75,
+        model=VERTEX_COVER_MODEL,
+    )
+    if not result:
+        return None
+    return result
+
+
+def _vertex_cover_image_part(
+    title: str,
+    prompt: str,
+    ai_summary: str,
+    story_children: str,
+    story_narration: str,
+) -> tuple[str, str, str] | None:
+    if not VERTEX_PROJECT_ID or (not VERTEX_API_KEY and not VERTEX_ACCESS_TOKEN):
+        return None
+
+    context = textwrap.shorten(
+        " ".join(part for part in (ai_summary, story_children, story_narration) if part),
+        width=1500,
+        placeholder="...",
+    )
+    endpoint = (
+        VERTEX_GENERATIVE_BASE_URL.rstrip("/")
+        if VERTEX_GENERATIVE_BASE_URL
+        else f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com"
+    )
+    model_path = (
+        VERTEX_COVER_MODEL
+        if VERTEX_COVER_MODEL.startswith("publishers/google/models/")
+        else f"publishers/google/models/{VERTEX_COVER_MODEL}"
+    )
+    url = f"{endpoint}/v1/projects/{VERTEX_PROJECT_ID}/locations/{VERTEX_LOCATION}/{model_path}:generateContent"
+
+    headers = {"Content-Type": "application/json"}
+    params: dict[str, str] | None = None
+    if VERTEX_API_KEY:
+        headers["x-goog-api-key"] = VERTEX_API_KEY
+        params = {"key": VERTEX_API_KEY}
+    if VERTEX_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {VERTEX_ACCESS_TOKEN}"
+
+    system_prompt = (
+        "You are a children's storybook cover illustrator. "
+        "Generate one warm, cinematic portrait image for a family memory cover. "
+        "No readable text in the image."
+    )
+    user_prompt = (
+        f"Title: {title or 'Untitled Story'}\n"
+        f"Cover prompt: {textwrap.shorten(prompt, width=500, placeholder='...')}\n"
+        f"Story context: {context or 'Family memory'}"
+    )
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": 0.8,
+            "responseModalities": ["TEXT", "IMAGE"],
+            "imageConfig": {"aspectRatio": "3:4"},
+        },
+    }
+
+    logger.info("vertex_cover_image_request model=%s", VERTEX_COVER_MODEL)
+    try:
+        with httpx.Client(timeout=60) as client:
+            response = client.post(url, params=params, headers=headers, json=payload)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body_preview = (exc.response.text or "")[:800].replace("\n", " ")
+        logger.error(
+            "vertex_cover_image_http_error model=%s status=%s body=%s",
+            VERTEX_COVER_MODEL,
+            exc.response.status_code,
+            body_preview,
+        )
+        return None
+    except Exception:
+        logger.exception("vertex_cover_image_failed model=%s", VERTEX_COVER_MODEL)
+        return None
+
+    body = response.json()
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        logger.warning("vertex_cover_image_empty_candidates model=%s", VERTEX_COVER_MODEL)
+        return None
+    content = candidates[0].get("content") if isinstance(candidates[0], dict) else None
+    parts = content.get("parts") if isinstance(content, dict) else None
+    if not isinstance(parts, list) or not parts:
+        logger.warning("vertex_cover_image_empty_parts model=%s", VERTEX_COVER_MODEL)
+        return None
+
+    caption = ""
+    for part in parts:
+        if isinstance(part, dict) and isinstance(part.get("text"), str) and not caption:
+            caption = part["text"].strip()
+        inline = part.get("inlineData") if isinstance(part, dict) else None
+        if isinstance(inline, dict):
+            data = inline.get("data")
+            mime = inline.get("mimeType")
+            if isinstance(data, str) and isinstance(mime, str) and mime.startswith("image/"):
+                return data, mime, caption
+
+    logger.warning("vertex_cover_image_missing_inline_data model=%s", VERTEX_COVER_MODEL)
+    return None
+
+
+def _render_image_cover_svg(
+    memory_id: str,
+    title: str,
+    image_b64: str,
+    image_mime_type: str,
+    caption: str,
+) -> str:
+    _ = (title, caption)
+    svg = f"""<svg xmlns='http://www.w3.org/2000/svg' width='800' height='1200' viewBox='0 0 800 1200'>
+  <image href='data:{image_mime_type};base64,{image_b64}' x='0' y='0' width='800' height='1200' preserveAspectRatio='none'>
+    <animateTransform attributeName='transform' type='scale' values='1;1.025;1' dur='10s' repeatCount='indefinite'/>
+  </image>
+</svg>"""
+
+    cover_path = COVER_DIR / f"{memory_id}.svg"
+    cover_path.write_text(svg, encoding="utf-8")
+    return str(cover_path)
+
+
+def _render_animated_cover_svg(memory_id: str, title: str, direction: dict[str, object]) -> str:
+    digest = hashlib.sha256((memory_id + title).encode("utf-8")).hexdigest()
+    d1 = f"#{digest[0:6]}"
+    d2 = f"#{digest[6:12]}"
+    d3 = f"#{digest[12:18]}"
+
+    c1 = _normalize_hex_color(direction.get("palette_top"), d1)
+    c2 = _normalize_hex_color(direction.get("palette_mid"), d2)
+    c3 = _normalize_hex_color(direction.get("palette_bottom"), d3)
+    accent = _normalize_hex_color(direction.get("accent"), "#f4e6a3")
+
+    motif_raw = str(direction.get("motif") or "stars").strip().lower()
+    motif = motif_raw if motif_raw in {"moon", "tree", "lantern", "kite", "stars", "home", "river"} else "stars"
+    motion_raw = str(direction.get("motion") or "drift").strip().lower()
+    motion = motion_raw if motion_raw in {"drift", "twinkle", "pulse", "sway"} else "drift"
+
+    safe_title = html.escape((title or "Untitled Story").strip()[:52])
+    raw_tagline = " ".join(str(direction.get("tagline") or "").split())[:70]
+    safe_tagline = html.escape(raw_tagline) if raw_tagline else "A family storybook memory"
+
+    title_len = len(safe_title)
+    title_size = min(94, max(46, 102 - title_len * 2))
+    move_animation = (
+        "<animateTransform attributeName='transform' type='translate' values='0 0; 0 -14; 0 0' dur='8s' repeatCount='indefinite'/>"
+        if motion in {"drift", "sway"}
+        else "<animate attributeName='opacity' values='0.45;0.85;0.45' dur='4.2s' repeatCount='indefinite'/>"
+    )
+
+    motifs: dict[str, str] = {
+        "moon": "<circle cx='702' cy='260' r='88' fill='rgba(255,255,255,0.4)'/>",
+        "tree": "<path d='M220 900 C255 760 360 690 430 890 Z' fill='rgba(255,255,255,0.24)'/>",
+        "lantern": "<rect x='660' y='290' width='78' height='110' rx='14' fill='rgba(255,255,255,0.3)'/>",
+        "kite": "<polygon points='650,240 740,320 650,400 560,320' fill='rgba(255,255,255,0.22)'/>",
+        "stars": "<g><circle cx='180' cy='220' r='6'/><circle cx='270' cy='170' r='4'/><circle cx='740' cy='210' r='5'/></g>",
+        "home": "<path d='M610 410 L700 330 L790 410 V520 H610 Z' fill='rgba(255,255,255,0.24)'/>",
+        "river": "<path d='M40 830 C260 760, 580 940, 860 860' stroke='rgba(255,255,255,0.3)' stroke-width='26' fill='none'/>",
+    }
+    motif_svg = motifs[motif]
+    sparkle_anim = (
+        "<animate attributeName='opacity' values='0.15;0.8;0.15' dur='3.4s' repeatCount='indefinite'/>"
+        if motion in {"twinkle", "pulse"}
+        else "<animate attributeName='opacity' values='0.25;0.55;0.25' dur='6.2s' repeatCount='indefinite'/>"
+    )
+
+    svg = f"""<svg xmlns='http://www.w3.org/2000/svg' width='900' height='1200' viewBox='0 0 900 1200'>
+  <defs>
+    <linearGradient id='bg' x1='0' y1='0' x2='0' y2='1'>
+      <stop offset='0%' stop-color='{c1}'/>
+      <stop offset='54%' stop-color='{c2}'/>
+      <stop offset='100%' stop-color='{c3}'/>
+    </linearGradient>
+    <radialGradient id='glow' cx='50%' cy='42%' r='54%'>
+      <stop offset='0%' stop-color='{accent}' stop-opacity='0.45'/>
+      <stop offset='100%' stop-color='{accent}' stop-opacity='0'/>
+    </radialGradient>
+  </defs>
+  <rect width='900' height='1200' fill='url(#bg)'/>
+  <circle cx='450' cy='470' r='470' fill='url(#glow)'>
+    {sparkle_anim}
+  </circle>
+  <g fill='{accent}'>
+    <circle cx='132' cy='220' r='4'>{sparkle_anim}</circle>
+    <circle cx='760' cy='300' r='5'>{sparkle_anim}</circle>
+    <circle cx='300' cy='930' r='5'>{sparkle_anim}</circle>
+  </g>
+  <g>
+    {motif_svg}
+    {move_animation}
+  </g>
+  <text x='450' y='760' text-anchor='middle' dominant-baseline='middle' fill='white' font-size='{title_size}' font-family='Inter, \"Segoe UI\", \"Helvetica Neue\", Arial, sans-serif' font-weight='800'>{safe_title}</text>
+  <text x='450' y='845' text-anchor='middle' fill='rgba(255,255,255,0.94)' font-size='34' font-family='Georgia, Times, serif'>{safe_tagline}</text>
+</svg>"""
+
+    cover_path = COVER_DIR / f"{memory_id}.svg"
+    cover_path.write_text(svg, encoding="utf-8")
+    return str(cover_path)
+
+
+def generate_cover_svg(
+    memory_id: str,
+    title: str,
+    prompt: str,
+    ai_summary: str = "",
+    story_children: str = "",
+    story_narration: str = "",
+) -> tuple[str, str]:
+    logger.info("cover_generation_started memory_id=%s title=%s", memory_id, (title or "Untitled")[:80])
+    if not VERTEX_PROJECT_ID or (not VERTEX_API_KEY and not VERTEX_ACCESS_TOKEN):
+        logger.warning("cover_generation_fallback memory_id=%s reason=no_vertex_config", memory_id)
+        return _legacy_cover_svg(memory_id, title, prompt), "generated_fallback_no_vertex_config"
+
+    try:
+        image_result = _vertex_cover_image_part(title, prompt, ai_summary, story_children, story_narration)
+        if image_result:
+            image_b64, image_mime_type, caption = image_result
+            logger.info("cover_generation_success memory_id=%s provider=vertex mode=image", memory_id)
+            return _render_image_cover_svg(memory_id, title, image_b64, image_mime_type, caption), "generated_vertex"
+
+        direction = _vertex_cover_direction(title, prompt, ai_summary, story_children, story_narration)
+        if direction:
+            logger.info("cover_generation_success memory_id=%s provider=vertex mode=direction", memory_id)
+            return _render_animated_cover_svg(memory_id, title, direction), "generated_vertex_direction_only"
+        logger.warning("cover_generation_fallback memory_id=%s reason=empty_vertex_response", memory_id)
+        return _legacy_cover_svg(memory_id, title, prompt), "generated_fallback_empty_vertex_response"
+    except Exception:
+        logger.exception("cover_generation_fallback memory_id=%s reason=vertex_error", memory_id)
+
+    return _legacy_cover_svg(memory_id, title, prompt), "generated_fallback_vertex_error"
+
+
 def _vertex_generate_json(
     system_prompt: str,
     user_prompt: str,
     *,
     temperature: float = 0.2,
+    model: str | None = None,
 ) -> dict | None:
     """Call Vertex Gemini generateContent; return parsed JSON dict or None."""
     if not VERTEX_PROJECT_ID or (not VERTEX_API_KEY and not VERTEX_ACCESS_TOKEN):
@@ -303,53 +594,90 @@ def _vertex_generate_json(
         if VERTEX_GENERATIVE_BASE_URL
         else f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com"
     )
-    model = VERTEX_STORY_MODEL
+    selected_model = model or VERTEX_STORY_MODEL
     model_path = (
-        model
-        if model.startswith("publishers/google/models/")
-        else f"publishers/google/models/{model}"
+        selected_model
+        if selected_model.startswith("publishers/google/models/")
+        else f"publishers/google/models/{selected_model}"
     )
     url = f"{endpoint}/v1/projects/{VERTEX_PROJECT_ID}/locations/{VERTEX_LOCATION}/{model_path}:generateContent"
 
     headers = {"Content-Type": "application/json"}
+    params: dict[str, str] | None = None
     if VERTEX_API_KEY:
         headers["x-goog-api-key"] = VERTEX_API_KEY
+        params = {"key": VERTEX_API_KEY}
     if VERTEX_ACCESS_TOKEN:
         headers["Authorization"] = f"Bearer {VERTEX_ACCESS_TOKEN}"
+
+    is_image_model = "flash-image" in selected_model
+    generation_config: dict[str, object] = {
+        "temperature": temperature,
+    }
+    if is_image_model:
+        generation_config["responseModalities"] = ["TEXT", "IMAGE"]
+        generation_config["imageConfig"] = {"aspectRatio": "3:4"}
+    else:
+        generation_config["responseMimeType"] = "application/json"
 
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-        "generationConfig": {
-            "temperature": temperature,
-            "responseMimeType": "application/json",
-        },
+        "generationConfig": generation_config,
     }
 
+    logger.info("vertex_generate_json_request model=%s temperature=%.2f", selected_model, temperature)
     try:
         with httpx.Client(timeout=30) as client:
-            response = client.post(url, params=None, headers=headers, json=payload)
+            response = client.post(url, params=params, headers=headers, json=payload)
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body_preview = (exc.response.text or "")[:800].replace("\n", " ")
+        logger.error(
+            "vertex_generate_json_http_error model=%s status=%s body=%s",
+            selected_model,
+            exc.response.status_code,
+            body_preview,
+        )
+        return None
     except Exception:
-        logger.exception("Vertex generateContent failed")
+        logger.exception("vertex_generate_json_failed model=%s", selected_model)
         return None
 
     body = response.json()
     candidates = body.get("candidates")
     if not isinstance(candidates, list) or not candidates:
+        logger.warning("vertex_generate_json_empty_candidates model=%s", selected_model)
         return None
     first = candidates[0]
     content = first.get("content") if isinstance(first, dict) else None
     parts = content.get("parts") if isinstance(content, dict) else None
     if not isinstance(parts, list) or not parts:
+        logger.warning("vertex_generate_json_empty_parts model=%s", selected_model)
         return None
-    text = parts[0].get("text") if isinstance(parts[0], dict) else None
+    text: str | None = None
+    for part in parts:
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            text = part["text"]
+            break
     if not isinstance(text, str):
+        logger.warning("vertex_generate_json_missing_text model=%s", selected_model)
         return None
+    raw = text.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    if raw and "{" in raw and "}" in raw:
+        raw = raw[raw.find("{") : raw.rfind("}") + 1]
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(raw)
         return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
+        logger.warning("vertex_generate_json_invalid_json model=%s", selected_model)
         return None
 
 

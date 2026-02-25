@@ -29,7 +29,7 @@ import { MemoryMapView } from './components/MemoryMapView'
 import { Recorder } from './components/Recorder'
 import { FamilyGraphView } from './components/FamilyGraphView'
 import virasatLogo from './assets/virasat-logo.png'
-import type { FamilyTree, Memory, TranscriptWord, User } from './types'
+import type { FamilySpeaker, FamilyTree, Memory, TranscriptWord, User } from './types'
 
 type View = 'home' | 'record' | 'detail' | 'account' | 'memory-map' | 'family-tree' | 'family-graph'
 type AuthMode = 'login' | 'signup'
@@ -238,7 +238,11 @@ function CoverRail({ title, items }: { title: string; items: Memory[] }) {
           {items.map((item) => (
             <button key={item.id} className="cover-card" onClick={() => navigate(`/recordings/${item.id}`)}>
               {item.cover_path ? (
-                <img src={toAssetUrl(`/covers/${item.id}.svg`)} alt={item.title} className="cover-image" />
+                <img
+                  src={toAssetUrl(`/covers/${item.id}.svg?v=${encodeURIComponent(item.updated_at || '')}`)}
+                  alt={item.title}
+                  className="cover-image"
+                />
               ) : (
                 <div className="cover-image placeholder">No cover yet</div>
               )}
@@ -280,12 +284,26 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
-  const [draftSpeaker, setDraftSpeaker] = useState('')
-  const [existingSpeakers, setExistingSpeakers] = useState<string[]>([])
-  const [speakerSelectValue, setSpeakerSelectValue] = useState<string>('')
+  const [existingSpeakers, setExistingSpeakers] = useState<FamilySpeaker[]>([])
+  const [selectedSpeakerPersonId, setSelectedSpeakerPersonId] = useState<string>('')
   const [recordStatus, setRecordStatus] = useState('')
   const [recordError, setRecordError] = useState('')
   const [isSavingRecord, setIsSavingRecord] = useState(false)
+  const [recordAddOpen, setRecordAddOpen] = useState(false)
+  const [recordFamilyTree, setRecordFamilyTree] = useState<FamilyTree | null>(null)
+  const [recordFamilyLoading, setRecordFamilyLoading] = useState(false)
+  const [recordFamilyError, setRecordFamilyError] = useState('')
+  const [recordNewRelativeName, setRecordNewRelativeName] = useState('')
+  const [recordRelatedToPersonId, setRecordRelatedToPersonId] = useState('')
+  const [recordNewRelationship, setRecordNewRelationship] = useState<'child' | 'parent' | 'partner' | 'sibling'>('child')
+  const [recordNewRelationshipType, setRecordNewRelationshipType] = useState<
+    'biological' | 'adoptive' | 'step' | 'guardian' | 'unknown'
+  >('unknown')
+  const [recordNewPartnerType, setRecordNewPartnerType] = useState<
+    'married' | 'partner' | 'divorced' | 'separated' | 'unknown'
+  >('unknown')
+  const [recordNewCertainty, setRecordNewCertainty] = useState<'certain' | 'estimated' | 'unknown'>('unknown')
+  const [recordAddingRelative, setRecordAddingRelative] = useState(false)
   const [familyTree, setFamilyTree] = useState<FamilyTree | null>(null)
   const [familyTreeLoading, setFamilyTreeLoading] = useState(false)
   const [familyTreeError, setFamilyTreeError] = useState('')
@@ -388,6 +406,19 @@ export default function App() {
     }
   }
 
+  async function refreshFamilySpeakers() {
+    try {
+      const speakers = await getSpeakers()
+      setExistingSpeakers(speakers)
+      setSelectedSpeakerPersonId((prev) =>
+        prev && speakers.some((speaker) => speaker.person_id === prev) ? prev : (speakers[0]?.person_id || '')
+      )
+    } catch {
+      setExistingSpeakers([])
+      setSelectedSpeakerPersonId('')
+    }
+  }
+
   useEffect(() => {
     const bootstrapAuth = async () => {
       const storedAccess = localStorage.getItem(ACCESS_TOKEN_KEY) || ''
@@ -462,6 +493,35 @@ export default function App() {
       })
       .finally(() => {
         if (!cancelled) setFamilyTreeLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [route.view, familyId])
+
+  useEffect(() => {
+    if (route.view !== 'record') return
+    if (!familyId) {
+      setRecordFamilyTree(null)
+      setRecordFamilyError('No elder-root family found yet. Set up an elder to add speakers.')
+      return
+    }
+    let cancelled = false
+    setRecordFamilyLoading(true)
+    setRecordFamilyError('')
+    getFamilyTree(familyId)
+      .then((data) => {
+        if (cancelled) return
+        setRecordFamilyTree(data)
+        setRecordRelatedToPersonId((prev) => prev || data.elder_person_id)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setRecordFamilyTree(null)
+        setRecordFamilyError(err instanceof Error ? err.message : 'Unable to load family members')
+      })
+      .finally(() => {
+        if (!cancelled) setRecordFamilyLoading(false)
       })
     return () => {
       cancelled = true
@@ -562,19 +622,13 @@ export default function App() {
   }, [route.view])
 
   useEffect(() => {
-    if (!recordedBlob || !authUser) return
-    let cancelled = false
-    getSpeakers()
-      .then((speakers) => {
-        if (!cancelled) setExistingSpeakers(speakers)
-      })
-      .catch(() => {
-        if (!cancelled) setExistingSpeakers([])
-      })
-    return () => {
-      cancelled = true
+    if (!authUser) {
+      setExistingSpeakers([])
+      setSelectedSpeakerPersonId('')
+      return
     }
-  }, [recordedBlob, authUser])
+    void refreshFamilySpeakers()
+  }, [authUser])
 
   useEffect(() => {
     if (!profileMenuOpen) return
@@ -672,10 +726,8 @@ export default function App() {
     () => [...memories].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 8),
     [memories],
   )
-  const currentSpeakerName =
-    speakerSelectValue === '__new__' ? draftSpeaker.trim() : (speakerSelectValue || '')
   const canSaveRecording =
-    !!recordedBlob && !!draftTitle.trim() && !!currentSpeakerName && !isSavingRecord
+    !!recordedBlob && !!draftTitle.trim() && !!selectedSpeakerPersonId && !isSavingRecord
 
   const detailItem = route.view === 'detail' ? memories.find((m) => m.id === route.id) : undefined
   const lyricLines = useMemo(() => buildLyricLines(detailItem?.transcript_timing || []), [detailItem?.transcript_timing])
@@ -932,6 +984,53 @@ export default function App() {
     }
   }
 
+  function handleRecordRelationshipSelection(nextRelationship: 'child' | 'parent' | 'partner' | 'sibling') {
+    setRecordNewRelationship(nextRelationship)
+    if (nextRelationship === 'partner') {
+      setRecordNewRelationshipType('unknown')
+    } else {
+      setRecordNewPartnerType('unknown')
+    }
+  }
+
+  async function submitRecordAddRelative(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!familyId || !recordFamilyTree) return
+    const cleanName = recordNewRelativeName.trim()
+    const connectTo = recordRelatedToPersonId || recordFamilyTree.elder_person_id
+    if (!cleanName || !connectTo) return
+
+    setRecordAddingRelative(true)
+    setRecordFamilyError('')
+    try {
+      const created = await addPersonWithEdge(familyId, {
+        display_name: cleanName,
+        connect_to_person_id: connectTo,
+        relationship: recordNewRelationship,
+        relationship_type: recordNewRelationshipType,
+        partner_type: recordNewPartnerType,
+        certainty: recordNewCertainty,
+      })
+
+      const updatedTree = await getFamilyTree(created.family_id || familyId)
+      setRecordFamilyTree(updatedTree)
+      setRecordRelatedToPersonId(updatedTree.elder_person_id)
+      setRecordNewRelativeName('')
+      setRecordNewRelationship('child')
+      setRecordNewRelationshipType('unknown')
+      setRecordNewPartnerType('unknown')
+      setRecordNewCertainty('unknown')
+      setRecordAddOpen(false)
+      await refreshFamilySpeakers()
+      setFamilyActionNoticeKind('success')
+      setFamilyActionNotice('Family member added and available as speaker.')
+    } catch (err) {
+      setRecordFamilyError(err instanceof Error ? err.message : 'Failed to add family member')
+    } finally {
+      setRecordAddingRelative(false)
+    }
+  }
+
   function startEditPerson(person: FamilyTree['people'][number]) {
     const personId = person.id
     setEditingPersonId(personId)
@@ -1164,14 +1263,14 @@ export default function App() {
   }
 
   async function saveRecordedMemory() {
-    if (!recordedBlob || !draftTitle.trim() || !currentSpeakerName) return
+    if (!recordedBlob || !draftTitle.trim() || !selectedSpeakerPersonId) return
 
     setIsSavingRecord(true)
     setRecordError('')
 
     try {
       setRecordStatus('Saving recording...')
-      const created = await createMemory(recordedBlob, draftTitle.trim(), currentSpeakerName)
+      const created = await createMemory(recordedBlob, draftTitle.trim(), selectedSpeakerPersonId)
 
       setRecordStatus('Transcribing with ElevenLabs...')
       await transcribeMemory(created.id)
@@ -1180,14 +1279,16 @@ export default function App() {
       await generateStory(created.id, 'Create a warm family storybook chapter based on this memory.')
 
       setRecordStatus('Designing story cover...')
-      await generateCover(created.id, 'Storybook cover with warm, nostalgic family tones')
+      const coverResult = await generateCover(created.id, 'Storybook cover with warm, nostalgic family tones')
 
       await loadMemories()
-      setRecordStatus('Saved. Transcript and story are ready.')
+      if ((coverResult.cover_status || '').startsWith('generated_fallback')) {
+        setRecordStatus('Saved. Story ready. Cover used fallback strategy.')
+      } else {
+        setRecordStatus('Saved. Transcript, story, and Vertex cover are ready.')
+      }
       setRecordedBlob(null)
       setDraftTitle('')
-      setDraftSpeaker('')
-      setSpeakerSelectValue('')
     } catch (err) {
       setRecordError(err instanceof Error ? err.message : 'Failed to save recording')
     } finally {
@@ -1372,7 +1473,11 @@ export default function App() {
                 {memories.map((item) => (
                   <button key={item.id} className="cover-wall-item" onClick={() => navigate(`/recordings/${item.id}`)}>
                     {item.cover_path ? (
-                      <img src={toAssetUrl(`/covers/${item.id}.svg`)} alt={item.title} className="cover-image" />
+                      <img
+                        src={toAssetUrl(`/covers/${item.id}.svg?v=${encodeURIComponent(item.updated_at || '')}`)}
+                        alt={item.title}
+                        className="cover-image"
+                      />
                     ) : (
                       <div className="cover-image placeholder">No cover</div>
                     )}
@@ -1406,13 +1511,137 @@ export default function App() {
       {route.view === 'record' ? (
         <div className="view-shell record-view">
           <section className="panel recorder-panel">
-            <Recorder
-              onReady={(blob) => {
-                setRecordedBlob(blob)
-                setRecordError('')
-                setRecordStatus('')
-              }}
-            />
+            <div className="record-prep-card">
+              <h3>Who is speaking?</h3>
+              <p className="meta">
+                {recordAddOpen ? 'Add a family member first, then select them as speaker.' : 'Choose an existing family member before recording.'}
+              </p>
+              {!recordAddOpen ? (
+                <div className="speaker-field">
+                  <select
+                    className="title-input speaker-select"
+                    value={selectedSpeakerPersonId}
+                    onChange={(e) => setSelectedSpeakerPersonId(e.target.value)}
+                    aria-label="Select speaker"
+                  >
+                    <option value="">Select family member...</option>
+                    {existingSpeakers.map((speaker) => (
+                      <option key={speaker.person_id} value={speaker.person_id}>
+                        {speaker.display_name}
+                        {speaker.is_elder_root ? ' (Elder)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn" onClick={() => setRecordAddOpen(true)}>
+                    Speaker not listed? Add Family Member
+                  </button>
+                  {existingSpeakers.length === 0 ? (
+                    <p className="meta">No family members found. Add one below.</p>
+                  ) : null}
+                </div>
+              ) : null}
+              {recordFamilyLoading ? <p className="meta">Loading family members...</p> : null}
+              {recordFamilyError ? <p className="error-text">{recordFamilyError}</p> : null}
+              {recordAddOpen && recordFamilyTree ? (
+                <form className="record-add-member-form" onSubmit={submitRecordAddRelative}>
+                  <input
+                    type="text"
+                    className="title-input"
+                    placeholder="Family member name"
+                    value={recordNewRelativeName}
+                    onChange={(e) => setRecordNewRelativeName(e.target.value)}
+                  />
+                  <select
+                    className="title-input"
+                    value={recordRelatedToPersonId || recordFamilyTree.elder_person_id}
+                    onChange={(e) => setRecordRelatedToPersonId(e.target.value)}
+                  >
+                    {recordFamilyTree.people.map((person) => (
+                      <option key={person.id} value={person.id}>
+                        Related to: {person.display_name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="title-input"
+                    value={recordNewRelationship}
+                    onChange={(e) =>
+                      handleRecordRelationshipSelection(e.target.value as 'child' | 'parent' | 'partner' | 'sibling')
+                    }
+                  >
+                    <option value="child">Child of</option>
+                    <option value="parent">Parent of</option>
+                    <option value="partner">Partner/Spouse of</option>
+                    <option value="sibling">Sibling of</option>
+                  </select>
+                  {recordNewRelationship !== 'partner' ? (
+                    <select
+                      className="title-input"
+                      value={recordNewRelationshipType}
+                      onChange={(e) =>
+                        setRecordNewRelationshipType(
+                          e.target.value as 'biological' | 'adoptive' | 'step' | 'guardian' | 'unknown'
+                        )
+                      }
+                    >
+                      <option value="unknown">Relationship type: unknown</option>
+                      <option value="biological">Biological</option>
+                      <option value="adoptive">Adoptive</option>
+                      <option value="step">Step</option>
+                      <option value="guardian">Guardian</option>
+                    </select>
+                  ) : (
+                    <select
+                      className="title-input"
+                      value={recordNewPartnerType}
+                      onChange={(e) =>
+                        setRecordNewPartnerType(
+                          e.target.value as 'married' | 'partner' | 'divorced' | 'separated' | 'unknown'
+                        )
+                      }
+                    >
+                      <option value="unknown">Partner type: unknown</option>
+                      <option value="married">Married</option>
+                      <option value="partner">Partner</option>
+                      <option value="separated">Separated</option>
+                      <option value="divorced">Divorced</option>
+                    </select>
+                  )}
+                  <select
+                    className="title-input"
+                    value={recordNewCertainty}
+                    onChange={(e) => setRecordNewCertainty(e.target.value as 'certain' | 'estimated' | 'unknown')}
+                  >
+                    <option value="unknown">Certainty: unknown</option>
+                    <option value="certain">Certain</option>
+                    <option value="estimated">Estimated</option>
+                  </select>
+                  <button
+                    type="submit"
+                    className="record-save-button"
+                    disabled={recordAddingRelative || !recordNewRelativeName.trim()}
+                  >
+                    {recordAddingRelative ? 'Adding...' : 'Add Member'}
+                  </button>
+                  <button type="button" className="btn" onClick={() => setRecordAddOpen(false)} disabled={recordAddingRelative}>
+                    Cancel
+                  </button>
+                </form>
+              ) : null}
+            </div>
+            {!recordAddOpen ? (
+              <Recorder
+                disabled={!selectedSpeakerPersonId}
+                disabledReason="Select a speaker first to start recording."
+                onReady={(blob) => {
+                  setRecordedBlob(blob)
+                  setRecordError('')
+                  setRecordStatus('')
+                }}
+              />
+            ) : (
+              <p className="meta">Finish adding the family member to unlock recording.</p>
+            )}
             {recordedBlob ? (
               <div className="record-form">
                 <div className="record-form-fields">
@@ -1423,32 +1652,11 @@ export default function App() {
                     value={draftTitle}
                     onChange={(e) => setDraftTitle(e.target.value)}
                   />
-                  <div className="speaker-field">
-                    <select
-                      className="title-input speaker-select"
-                      value={speakerSelectValue}
-                      onChange={(e) => setSpeakerSelectValue(e.target.value)}
-                      aria-label="Select speaker"
-                    >
-                      <option value="">Select speaker...</option>
-                      {existingSpeakers.map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                      <option value="__new__">Add new speaker</option>
-                    </select>
-                    {speakerSelectValue === '__new__' ? (
-                      <input
-                        type="text"
-                        className="title-input speaker-input"
-                        placeholder="New speaker name"
-                        value={draftSpeaker}
-                        onChange={(e) => setDraftSpeaker(e.target.value)}
-                        aria-label="New speaker name"
-                      />
-                    ) : null}
-                  </div>
+                  <p className="meta">
+                    Speaker:{' '}
+                    {existingSpeakers.find((speaker) => speaker.person_id === selectedSpeakerPersonId)?.display_name ||
+                      'Select speaker above before saving'}
+                  </p>
                 </div>
                 <div className="record-form-actions">
                   <button type="button" className="record-save-button" disabled={!canSaveRecording} onClick={saveRecordedMemory}>
@@ -1954,7 +2162,7 @@ export default function App() {
                   <h3>Cover Photo</h3>
                   {detailItem.cover_path ? (
                     <img
-                      src={toAssetUrl(`/covers/${detailItem.id}.svg`)}
+                      src={toAssetUrl(`/covers/${detailItem.id}.svg?v=${encodeURIComponent(detailItem.updated_at || '')}`)}
                       alt={`${detailItem.title} cover`}
                       className="detail-cover"
                     />
@@ -2178,7 +2386,11 @@ export default function App() {
                   }}
                 >
                   {item.cover_path ? (
-                    <img src={toAssetUrl(`/covers/${item.id}.svg`)} alt={item.title} className="search-result-cover" />
+                    <img
+                      src={toAssetUrl(`/covers/${item.id}.svg?v=${encodeURIComponent(item.updated_at || '')}`)}
+                      alt={item.title}
+                      className="search-result-cover"
+                    />
                   ) : (
                     <div className="search-result-cover placeholder">No cover</div>
                   )}

@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 
 type RecorderProps = {
   onReady: (blob: Blob) => void
+  disabled?: boolean
+  disabledReason?: string
 }
 
-export function Recorder({ onReady }: RecorderProps) {
+export function Recorder({ onReady, disabled = false, disabledReason = '' }: RecorderProps) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -209,9 +211,11 @@ export function Recorder({ onReady }: RecorderProps) {
   return (
     <div className="recorder">
       <button
+        type="button"
         className={`record-button ${isRecording ? 'is-recording' : ''}`}
         onClick={isRecording ? stopRecording : startRecording}
         aria-label={isRecording ? 'Stop recording' : 'Start recording'}
+        disabled={disabled && !isRecording}
       >
         {isRecording ? (
           <svg viewBox="0 0 24 24" aria-hidden="true" className="record-mic-icon">
@@ -224,6 +228,7 @@ export function Recorder({ onReady }: RecorderProps) {
           </svg>
         )}
       </button>
+      {disabled && !isRecording && disabledReason ? <p className="meta">{disabledReason}</p> : null}
       {showWaveform ? (
         <div className="waveform-wrap">
           <canvas ref={canvasRef} className="waveform-canvas" />

@@ -309,7 +309,11 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
                       onClick={() => onNavigate(`/recordings/${memory.id}`)}
                     >
                       {memory.cover_path ? (
-                        <img src={toAssetUrl(`/covers/${memory.id}.svg`)} alt="" className="memory-map-related-cover" />
+                        <img
+                          src={toAssetUrl(`/covers/${memory.id}.svg?v=${encodeURIComponent(memory.updated_at || '')}`)}
+                          alt=""
+                          className="memory-map-related-cover"
+                        />
                       ) : (
                         <div className="memory-map-related-cover placeholder">No cover</div>
                       )}
