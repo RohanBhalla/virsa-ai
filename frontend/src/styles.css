@@ -945,6 +945,44 @@ p {
   cursor: not-allowed;
 }
 
+.memory-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.memory-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.32rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.memory-tag-mood {
+  background: linear-gradient(135deg, rgba(186, 114, 6, 0.18), rgba(186, 114, 6, 0.08));
+  color: #6b3a02;
+  border: 1px solid rgba(186, 114, 6, 0.28);
+}
+
+.memory-tag-theme {
+  background: rgba(91, 82, 72, 0.1);
+  color: var(--muted);
+  border: 1px solid rgba(91, 82, 72, 0.2);
+}
+
+.memory-tags-detail {
+  margin-top: 0.5rem;
+}
+
+.memory-tags-detail .memory-tag {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.82rem;
+}
+
 .record-list {
   margin-top: 0.75rem;
   display: grid;
@@ -985,6 +1023,49 @@ p {
   font-size: 1rem;
 }
 
+.detail-story-tabs {
+  gap: 0;
+}
+
+.story-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(30, 28, 26, 0.12);
+  padding-bottom: 0.25rem;
+}
+
+.story-tab {
+  border: 0;
+  border-radius: var(--radius-md);
+  padding: 0.5rem 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+
+.story-tab:hover {
+  color: var(--ink);
+  background: rgba(91, 82, 72, 0.08);
+}
+
+.story-tab.active {
+  color: var(--accent);
+  background: rgba(186, 114, 6, 0.12);
+}
+
+.story-tab-panel {
+  margin: 0;
+}
+
+.story-tab-panel[hidden] {
+  display: none;
+}
+
 .detail-cover {
   width: min(100%, 380px);
   aspect-ratio: 2 / 3;
@@ -1016,44 +1097,91 @@ p {
 }
 
 .lyrics-panel {
-  width: min(100%, 700px);
-  max-height: 280px;
+  width: min(100%, 560px);
+  min-height: 320px;
+  max-height: 420px;
   overflow-y: auto;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 239, 231, 0.9));
+  background: linear-gradient(180deg, var(--card) 0%, rgba(255, 253, 249, 0.98) 50%, #f8f4ec 100%);
   border: 1px solid rgba(30, 28, 26, 0.1);
-  border-radius: 14px;
-  padding: 0.35rem;
+  border-radius: 16px;
+  padding: 2rem 1.25rem 2.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  box-shadow: 0 4px 20px rgba(74, 33, 2, 0.06);
 }
 
 .lyric-line {
   width: 100%;
+  max-width: 420px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
-  color: #4b3e31;
-  text-align: left;
-  padding: 0.52rem 0.65rem;
-  display: grid;
-  grid-template-columns: 3rem 1fr;
-  gap: 0.5rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 0.4rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
   cursor: pointer;
-  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+  transition: color 0.25s ease, transform 0.25s ease, opacity 0.25s ease;
 }
 
 .lyric-line:hover {
-  background: rgba(121, 75, 25, 0.07);
+  color: var(--ink);
+}
+
+.lyric-line-past {
+  opacity: 0.5;
+  color: var(--muted);
+}
+
+.lyric-line-past .lyric-line-text {
+  font-size: 0.9rem;
 }
 
 .lyric-line-active {
-  background: rgba(121, 75, 25, 0.18);
-  color: #2f1707;
-  transform: scale(1.01);
+  opacity: 1;
+  color: var(--ink);
+  transform: scale(1.02);
+}
+
+.lyric-line-active .lyric-line-text {
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+}
+
+.lyric-line-upcoming {
+  opacity: 0.55;
+  color: var(--muted);
+}
+
+.lyric-line-upcoming .lyric-line-text {
+  font-size: 0.9rem;
 }
 
 .lyric-line-time {
   font-variant-numeric: tabular-nums;
-  color: #7f6f61;
-  font-size: 0.82rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+}
+
+.lyric-line-time-active {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-bottom: 0.15rem;
+  opacity: 0.85;
+}
+
+.lyric-line-text {
+  display: block;
+  transition: font-size 0.25s ease, font-weight 0.25s ease;
 }
 
 .detail-transcript-fallback {

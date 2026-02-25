@@ -44,6 +44,10 @@ function navigate(path: string) {
   window.location.hash = path
 }
 
+function formatMemoryTag(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 function animateScrollByX(el: HTMLElement, distance: number, duration = 420) {
   const start = el.scrollLeft
   const target = start + distance
@@ -248,6 +252,7 @@ export default function App() {
   const voiceChunksRef = useRef<Blob[]>([])
   const [playheadSeconds, setPlayheadSeconds] = useState(0)
   const [audioSrc, setAudioSrc] = useState('')
+  const [storyTab, setStoryTab] = useState<'summary' | 'children' | 'narration'>('summary')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const lyricLineRefs = useRef<Array<HTMLButtonElement | null>>([])
   const profileMenuRef = useRef<HTMLDivElement | null>(null)
@@ -549,6 +554,7 @@ export default function App() {
   useEffect(() => {
     lyricLineRefs.current = []
     setPlayheadSeconds(0)
+    setStoryTab('summary')
   }, [detailItem?.id])
 
   useEffect(() => {
@@ -908,6 +914,16 @@ export default function App() {
                 <div className="detail-head">
                   <h2>{detailItem.title}</h2>
                   <p className="meta">{new Date(detailItem.created_at).toLocaleString()}</p>
+                  {(detailItem.mood_tag?.trim() || (detailItem.themes?.length ?? 0) > 0) ? (
+                    <div className="memory-tags memory-tags-detail">
+                      {detailItem.mood_tag?.trim() ? (
+                        <span className="memory-tag memory-tag-mood">{formatMemoryTag(detailItem.mood_tag)}</span>
+                      ) : null}
+                      {(detailItem.themes ?? []).map((t) => (
+                        <span key={t} className="memory-tag memory-tag-theme">{formatMemoryTag(t)}</span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
 
                 <section className="detail-block">
@@ -923,25 +939,75 @@ export default function App() {
                   )}
                 </section>
 
-                <section className="detail-block">
-                  <h3>Book-Style AI Summary</h3>
-                  <p className="detail-summary">
-                    {detailItem.ai_summary || 'AI summary not generated yet.'}
-                  </p>
-                </section>
-
-                <section className="detail-block">
-                  <h3>Children's Version</h3>
-                  <p className="detail-summary">
-                    {detailItem.story_children || 'Children version not generated yet.'}
-                  </p>
-                </section>
-
-                <section className="detail-block">
-                  <h3>Documentary Narration</h3>
-                  <p className="detail-summary">
-                    {detailItem.story_narration || 'Narration version not generated yet.'}
-                  </p>
+                <section className="detail-block detail-story-tabs">
+                  <div className="story-tabs" role="tablist" aria-label="Story versions">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={storyTab === 'summary'}
+                      aria-controls="story-panel-summary"
+                      id="story-tab-summary"
+                      className={`story-tab ${storyTab === 'summary' ? 'active' : ''}`}
+                      onClick={() => setStoryTab('summary')}
+                    >
+                      Book-Style AI Summary
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={storyTab === 'children'}
+                      aria-controls="story-panel-children"
+                      id="story-tab-children"
+                      className={`story-tab ${storyTab === 'children' ? 'active' : ''}`}
+                      onClick={() => setStoryTab('children')}
+                    >
+                      Children&apos;s Version
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={storyTab === 'narration'}
+                      aria-controls="story-panel-narration"
+                      id="story-tab-narration"
+                      className={`story-tab ${storyTab === 'narration' ? 'active' : ''}`}
+                      onClick={() => setStoryTab('narration')}
+                    >
+                      Documentary Narration
+                    </button>
+                  </div>
+                  <div
+                    id="story-panel-summary"
+                    role="tabpanel"
+                    aria-labelledby="story-tab-summary"
+                    hidden={storyTab !== 'summary'}
+                    className="story-tab-panel"
+                  >
+                    <p className="detail-summary">
+                      {detailItem.ai_summary || 'AI summary not generated yet.'}
+                    </p>
+                  </div>
+                  <div
+                    id="story-panel-children"
+                    role="tabpanel"
+                    aria-labelledby="story-tab-children"
+                    hidden={storyTab !== 'children'}
+                    className="story-tab-panel"
+                  >
+                    <p className="detail-summary">
+                      {detailItem.story_children || 'Children version not generated yet.'}
+                    </p>
+                  </div>
+                  <div
+                    id="story-panel-narration"
+                    role="tabpanel"
+                    aria-labelledby="story-tab-narration"
+                    hidden={storyTab !== 'narration'}
+                    className="story-tab-panel"
+                  >
+                    <p className="detail-summary">
+                      {detailItem.story_narration || 'Narration version not generated yet.'}
+                    </p>
+                  </div>
                 </section>
 
                 <section className="detail-block">
@@ -963,21 +1029,29 @@ export default function App() {
                 <section className="detail-block">
                   <h3>Live Transcript</h3>
                   {lyricLines.length > 0 ? (
-                    <div className="lyrics-panel spring-scroll">
-                      {lyricLines.map((line, idx) => (
-                        <button
-                          key={`${line.start}-${idx}`}
-                          ref={(element) => {
-                            lyricLineRefs.current[idx] = element
-                          }}
-                          type="button"
-                          className={`lyric-line ${idx === activeLyricIndex ? 'lyric-line-active' : ''}`}
-                          onClick={() => seekToLyric(line.start)}
-                        >
-                          <span className="lyric-line-time">{formatTime(line.start)}</span>
-                          <span>{line.text}</span>
-                        </button>
-                      ))}
+                    <div className="lyrics-panel spring-scroll" role="list">
+                      {lyricLines.map((line, idx) => {
+                        const isActive = idx === activeLyricIndex
+                        const isPast = idx < activeLyricIndex
+                        const state = isActive ? 'active' : isPast ? 'past' : 'upcoming'
+                        return (
+                          <button
+                            key={`${line.start}-${idx}`}
+                            ref={(element) => {
+                              lyricLineRefs.current[idx] = element
+                            }}
+                            type="button"
+                            className={`lyric-line lyric-line-${state}`}
+                            onClick={() => seekToLyric(line.start)}
+                            role="listitem"
+                          >
+                            {isActive ? (
+                              <span className="lyric-line-time lyric-line-time-active">{formatTime(line.start)}</span>
+                            ) : null}
+                            <span className="lyric-line-text">{line.text}</span>
+                          </button>
+                        )
+                      })}
                     </div>
                   ) : (
                     <p className="detail-transcript-fallback">

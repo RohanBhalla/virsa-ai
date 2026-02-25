@@ -263,7 +263,13 @@ def generate_cover_svg(memory_id: str, title: str, prompt: str) -> str:
     c3 = f"#{digest[12:18]}"
 
     safe_title = (title or "Untitled Story").replace("&", "and")[:48]
-    safe_prompt = textwrap.shorten(prompt or "Family memory", width=84, placeholder="...").replace("&", "and")
+
+    # Center title: one line, large bold sans-serif, reference book-cover style
+    # Font: modern bold sans-serif; size scales down slightly for longer titles
+    title_len = len(safe_title)
+    font_size = min(96, max(48, 100 - title_len * 2))
+    center_x = 450
+    center_y = 600
 
     svg = f"""<svg xmlns='http://www.w3.org/2000/svg' width='900' height='1200' viewBox='0 0 900 1200'>
   <defs>
@@ -274,12 +280,7 @@ def generate_cover_svg(memory_id: str, title: str, prompt: str) -> str:
     </linearGradient>
   </defs>
   <rect width='900' height='1200' fill='url(#bg)'/>
-  <rect x='70' y='90' width='760' height='1020' rx='38' fill='rgba(255,255,255,0.12)' stroke='rgba(255,255,255,0.35)'/>
-  <text x='110' y='220' fill='white' font-size='64' font-family='Georgia, serif' font-weight='700'>{safe_title}</text>
-  <text x='110' y='300' fill='white' font-size='28' font-family='Arial, sans-serif' opacity='0.92'>Storybook Memory</text>
-  <text x='110' y='390' fill='white' font-size='24' font-family='Arial, sans-serif' opacity='0.88'>{safe_prompt}</text>
-  <circle cx='740' cy='980' r='120' fill='rgba(255,255,255,0.18)'/>
-  <circle cx='210' cy='910' r='90' fill='rgba(255,255,255,0.12)'/>
+  <text x='{center_x}' y='{center_y}' text-anchor='middle' dominant-baseline='middle' fill='white' font-size='{font_size}' font-family='Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif' font-weight='700'>{safe_title}</text>
 </svg>"""
 
     cover_path = COVER_DIR / f"{memory_id}.svg"

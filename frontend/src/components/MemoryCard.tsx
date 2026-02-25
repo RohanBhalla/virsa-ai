@@ -1,6 +1,10 @@
 import type { Memory } from '../types'
 import { toAssetUrl } from '../api'
 
+function formatTag(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 type MemoryCardProps = {
   item: Memory
   busy: boolean
@@ -11,6 +15,8 @@ type MemoryCardProps = {
 
 export function MemoryCard({ item, busy, onTranscribe, onStory, onCover }: MemoryCardProps) {
   const coverUrl = item.cover_path ? toAssetUrl(`/covers/${item.id}.svg`) : ''
+  const mood = item.mood_tag?.trim()
+  const themes = item.themes?.length ? item.themes : []
 
   return (
     <article className="memory-card">
@@ -20,6 +26,14 @@ export function MemoryCard({ item, busy, onTranscribe, onStory, onCover }: Memor
       <div className="memory-content">
         <h3>{item.title}</h3>
         <p className="meta">{new Date(item.created_at).toLocaleString()}</p>
+        {(mood || themes.length > 0) ? (
+          <div className="memory-tags">
+            {mood ? <span className="memory-tag memory-tag-mood">{formatTag(mood)}</span> : null}
+            {themes.map((t) => (
+              <span key={t} className="memory-tag memory-tag-theme">{formatTag(t)}</span>
+            ))}
+          </div>
+        ) : null}
         <p className="excerpt">{item.ai_summary || item.transcript.slice(0, 120) || 'Record and transcribe to generate a story.'}</p>
         <div className="actions">
           <button className="chip" disabled={busy} onClick={() => onTranscribe(item.id)}>Transcribe</button>
