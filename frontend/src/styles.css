@@ -28,7 +28,7 @@ body {
   background: #f8f4ec;
   min-height: 100vh;
   overflow-x: hidden;
-  touch-action: manipulation;
+  touch-action: auto;
 }
 
 body::before,
@@ -1387,6 +1387,267 @@ p {
   margin-top: 0.2rem;
 }
 
+.family-tree-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.family-tree-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.family-tree-head-actions {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.family-tree-view {
+  padding-bottom: 7rem;
+}
+
+.family-tree-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.7rem;
+  overflow-x: auto;
+}
+
+.family-gen-column {
+  border: 1px solid rgba(30, 28, 26, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.55rem;
+  min-height: 150px;
+}
+
+.family-gen-column h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.family-gen-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.family-person-card {
+  border: 1px solid rgba(30, 28, 26, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  padding: 0.6rem 0.65rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.family-person-card.elder {
+  border-color: rgba(186, 114, 6, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(186, 114, 6, 0.18);
+}
+
+.person-edit-form {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.person-edit-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.family-inline-btn {
+  width: fit-content;
+}
+
+.family-add-form {
+  display: grid;
+  gap: 0.55rem;
+  max-width: 680px;
+}
+
+.family-add-panel {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.form-step {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid rgba(30, 28, 26, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.form-step-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #3f3327;
+}
+
+.form-step-help {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.family-add-form h3 {
+  margin: 0.2rem 0 0;
+}
+
+.family-relations-panel,
+.family-link-panel {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.family-relations-panel h3,
+.family-link-panel h3 {
+  margin: 0.15rem 0 0;
+}
+
+.family-relations-list {
+  display: grid;
+  gap: 0.45rem;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.family-relation-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  border: 1px solid rgba(30, 28, 26, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 0.45rem 0.55rem;
+}
+
+.family-danger-btn {
+  color: #982024;
+}
+
+.family-link-form {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 680px;
+}
+
+.family-graph-view {
+  padding-bottom: 7rem;
+}
+
+.family-graph-panel {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.family-graph-actions {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.family-graph-wrap {
+  width: 100%;
+  min-height: 62vh;
+  border: 1px solid rgba(30, 28, 26, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  overflow: hidden;
+}
+
+.family-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.family-graph-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.family-graph-legend i {
+  width: 1rem;
+  height: 0.16rem;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.family-graph-legend-note {
+  font-style: italic;
+}
+
+.status-banner {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 10px;
+  font-size: 0.86rem;
+  border: 1px solid transparent;
+}
+
+.status-banner.success {
+  color: #145a2c;
+  background: rgba(34, 168, 79, 0.14);
+  border-color: rgba(26, 140, 65, 0.28);
+}
+
+.status-banner.error {
+  color: #8d1e21;
+  background: rgba(200, 49, 49, 0.14);
+  border-color: rgba(170, 30, 30, 0.28);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 15, 14, 0.32);
+  display: grid;
+  place-items: center;
+  z-index: 70;
+  padding: 1rem;
+}
+
+.elder-modal {
+  width: min(560px, 94vw);
+  display: grid;
+  gap: 0.7rem;
+}
+
+.elder-modal h2 {
+  margin: 0;
+}
+
+.elder-form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.consent-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.elder-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
 .status-text {
   color: var(--accent);
   margin-bottom: 0.3rem;
@@ -1412,7 +1673,7 @@ p {
 .bottom-nav {
   position: relative;
   overflow: hidden;
-  width: min(360px, 72vw);
+  width: min(460px, 76vw);
   background:
     linear-gradient(140deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.1)),
     linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06));
@@ -1420,7 +1681,7 @@ p {
   border-radius: 999px;
   padding: var(--pill-pad, 0.34rem);
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.3rem;
   backdrop-filter: blur(18px) saturate(1.25);
   -webkit-backdrop-filter: blur(18px) saturate(1.25);
@@ -1447,7 +1708,7 @@ p {
   top: 0.34rem;
   bottom: 0.34rem;
   left: 0.34rem;
-  width: calc(33.333% - 0.49rem);
+  width: calc(25% - 0.52rem);
   border-radius: 999px;
   background:
     linear-gradient(150deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.42));
@@ -1464,11 +1725,15 @@ p {
 }
 
 .nav-indicator.is-memory-map {
+  transform: translateX(200%);
+}
+
+.nav-indicator.is-family-tree {
   transform: translateX(100%);
 }
 
 .nav-indicator.is-record {
-  transform: translateX(200%);
+  transform: translateX(300%);
 }
 
 .bottom-nav button {
@@ -1872,13 +2137,34 @@ p {
   }
 
   .bottom-nav {
-    width: min(390px, 58vw);
+    width: min(500px, 64vw);
   }
 
   .search-island {
     top: 3.4rem;
     bottom: 4.8rem;
     width: min(820px, 72vw);
+  }
+}
+
+@media (max-width: 699px) {
+  .family-tree-head-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .family-graph-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .family-graph-wrap {
+    min-height: 56vh;
+  }
+
+  .family-relation-item {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 

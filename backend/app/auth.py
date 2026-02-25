@@ -163,10 +163,14 @@ def create_session(user: dict[str, Any], user_agent: str | None = None, ip_addre
 
 
 def _sanitize_user(user: dict[str, Any]) -> dict[str, Any]:
+    default_family_id = user.get("default_family_id")
+    default_elder_person_id = user.get("default_elder_person_id")
     return {
         "id": str(user.get("id") or ""),
         "email": str(user.get("email") or ""),
         "name": str(user.get("name") or ""),
+        "default_family_id": default_family_id if isinstance(default_family_id, str) else "",
+        "default_elder_person_id": default_elder_person_id if isinstance(default_elder_person_id, str) else "",
         "created_at": str(user.get("created_at") or ""),
         "updated_at": str(user.get("updated_at") or ""),
     }

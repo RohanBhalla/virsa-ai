@@ -5,6 +5,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ from .auth import (
 )
 from .db import (
     chunks_collection,
+    family_edges_collection,
+    family_people_collection,
     init_db,
     memories_collection,
     memory_to_response,
@@ -56,9 +59,20 @@ from .services import (
 
 app = FastAPI(title="Virsa AI", version="0.2.0")
 
+_cors_origins = {
+    (APP_ORIGIN or "").rstrip("/"),
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+}
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[APP_ORIGIN, "http://localhost:3000", "http://localhost:5173"],
+    allow_origins=sorted(origin for origin in _cors_origins if origin),
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -90,6 +104,12 @@ class RegisterRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=10, max_length=1024)
     name: str = Field(default="", max_length=120)
+    elder_display_name: str = Field(default="", max_length=120)
+    elder_birth_year: int | None = Field(default=None, ge=1800, le=2100)
+    elder_age_range: str = Field(default="", max_length=60)
+    elder_preferred_language: str = Field(default="", max_length=60)
+    elder_home_region: str = Field(default="", max_length=120)
+    elder_consent: bool = Field(default=False)
 
 
 class LoginRequest(BaseModel):
@@ -105,6 +125,57 @@ class LogoutRequest(BaseModel):
     refresh_token: str = Field(min_length=20, max_length=4096)
 
 
+class CreateElderRootRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=120)
+    birth_year: int | None = Field(default=None, ge=1800, le=2100)
+    age_range: str = Field(default="", max_length=60)
+    preferred_language: str = Field(default="", max_length=60)
+    home_region: str = Field(default="", max_length=120)
+    consent: bool = Field(default=False)
+
+
+class CreatePersonWithEdgeRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=120)
+    given_name: str = Field(default="", max_length=120)
+    family_name: str = Field(default="", max_length=120)
+    sex: Literal["female", "male", "other", "unknown"] = "unknown"
+    birth_year: int | None = Field(default=None, ge=1800, le=2100)
+    death_year: int | None = Field(default=None, ge=1800, le=2100)
+    notes: str = Field(default="", max_length=2000)
+    connect_to_person_id: str = Field(min_length=1, max_length=64)
+    relationship: Literal["child", "parent", "partner", "sibling"]
+    relationship_type: Literal["biological", "adoptive", "step", "guardian", "unknown"] = "unknown"
+    partner_type: Literal["married", "partner", "divorced", "separated", "unknown"] = "unknown"
+    certainty: Literal["certain", "estimated", "unknown"] = "unknown"
+    start_year: int | None = Field(default=None, ge=1800, le=2100)
+    end_year: int | None = Field(default=None, ge=1800, le=2100)
+
+
+class UpdateFamilyPersonRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    given_name: str | None = Field(default=None, max_length=120)
+    family_name: str | None = Field(default=None, max_length=120)
+    sex: Literal["female", "male", "other", "unknown"] | None = None
+    birth_year: int | None = Field(default=None, ge=1800, le=2100)
+    death_year: int | None = Field(default=None, ge=1800, le=2100)
+    notes: str | None = Field(default=None, max_length=2000)
+    age_range: str | None = Field(default=None, max_length=60)
+    preferred_language: str | None = Field(default=None, max_length=60)
+    home_region: str | None = Field(default=None, max_length=120)
+    consent: bool | None = None
+
+
+class CreateFamilyEdgeRequest(BaseModel):
+    kind: Literal["parent_child", "partner"]
+    from_person_id: str = Field(min_length=1, max_length=64)
+    to_person_id: str = Field(min_length=1, max_length=64)
+    relationship_type: Literal["biological", "adoptive", "step", "guardian", "unknown"] = "unknown"
+    partner_type: Literal["married", "partner", "divorced", "separated", "unknown"] = "unknown"
+    certainty: Literal["certain", "estimated", "unknown"] = "unknown"
+    start_year: int | None = Field(default=None, ge=1800, le=2100)
+    end_year: int | None = Field(default=None, ge=1800, le=2100)
+
+
 def _request_client_meta(request: Request) -> tuple[str | None, str | None]:
     user_agent = request.headers.get("user-agent")
     forwarded_for = request.headers.get("x-forwarded-for", "")
@@ -114,19 +185,200 @@ def _request_client_meta(request: Request) -> tuple[str | None, str | None]:
     return user_agent, remote_ip
 
 
+def _create_elder_root_family(
+    owner_user_id: str,
+    *,
+    elder_display_name: str,
+    elder_birth_year: int | None = None,
+    elder_age_range: str = "",
+    elder_preferred_language: str = "",
+    elder_home_region: str = "",
+    elder_consent: bool = False,
+) -> tuple[str, str]:
+    family_id = str(uuid4())
+    elder_person_id = str(uuid4())
+    now = now_iso()
+    family_people_collection().insert_one(
+        {
+            "id": elder_person_id,
+            "owner_user_id": owner_user_id,
+            "family_id": family_id,
+            "is_elder_root": True,
+            "display_name": elder_display_name,
+            "given_name": "",
+            "family_name": "",
+            "sex": "unknown",
+            "birth_year": elder_birth_year,
+            "death_year": None,
+            "notes": "",
+            "age_range": elder_age_range,
+            "preferred_language": elder_preferred_language,
+            "home_region": elder_home_region,
+            "consent": elder_consent,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    users_collection().update_one(
+        {"id": owner_user_id},
+        {
+            "$set": {
+                "default_family_id": family_id,
+                "default_elder_person_id": elder_person_id,
+                "updated_at": now_iso(),
+            }
+        },
+    )
+    return family_id, elder_person_id
+
+
+def _family_elder_root_or_404(owner_user_id: str, family_id: str) -> dict:
+    elder = family_people_collection().find_one(
+        {
+            "owner_user_id": owner_user_id,
+            "family_id": family_id,
+            "is_elder_root": True,
+        },
+        {"_id": 0},
+    )
+    if not elder:
+        raise HTTPException(status_code=404, detail="Family not found")
+    return elder
+
+
+def _person_in_family_or_404(owner_user_id: str, family_id: str, person_id: str) -> dict:
+    person = family_people_collection().find_one(
+        {
+            "owner_user_id": owner_user_id,
+            "family_id": family_id,
+            "id": person_id,
+        },
+        {"_id": 0},
+    )
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found in family")
+    return person
+
+
+def _build_edge_doc(
+    owner_user_id: str,
+    family_id: str,
+    *,
+    kind: Literal["parent_child", "partner"],
+    from_person_id: str,
+    to_person_id: str,
+    relationship_type: str = "unknown",
+    partner_type: str = "unknown",
+    certainty: str = "unknown",
+    start_year: int | None = None,
+    end_year: int | None = None,
+) -> dict:
+    now = now_iso()
+    return {
+        "id": str(uuid4()),
+        "owner_user_id": owner_user_id,
+        "family_id": family_id,
+        "kind": kind,
+        "from_person_id": from_person_id,
+        "to_person_id": to_person_id,
+        "relationship_type": relationship_type if kind == "parent_child" else "unknown",
+        "partner_type": partner_type if kind == "partner" else "unknown",
+        "certainty": certainty,
+        "start_year": start_year,
+        "end_year": end_year,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _validate_edge_years(start_year: int | None, end_year: int | None) -> None:
+    if start_year is not None and end_year is not None and start_year > end_year:
+        raise HTTPException(status_code=400, detail="start_year must be less than or equal to end_year")
+
+
+def _edge_exists(
+    owner_user_id: str,
+    family_id: str,
+    *,
+    kind: Literal["parent_child", "partner"],
+    from_person_id: str,
+    to_person_id: str,
+) -> bool:
+    if kind == "partner":
+        query = {
+            "owner_user_id": owner_user_id,
+            "family_id": family_id,
+            "kind": "partner",
+            "$or": [
+                {"from_person_id": from_person_id, "to_person_id": to_person_id},
+                {"from_person_id": to_person_id, "to_person_id": from_person_id},
+            ],
+        }
+    else:
+        query = {
+            "owner_user_id": owner_user_id,
+            "family_id": family_id,
+            "kind": "parent_child",
+            "from_person_id": from_person_id,
+            "to_person_id": to_person_id,
+        }
+    return family_edges_collection().find_one(query, {"_id": 1}) is not None
+
+
+def _strip_mongo_id(doc: dict) -> dict:
+    clean = dict(doc)
+    clean.pop("_id", None)
+    return clean
+
+
+def _edge_in_family_or_404(owner_user_id: str, family_id: str, edge_id: str) -> dict:
+    edge = family_edges_collection().find_one(
+        {
+            "owner_user_id": owner_user_id,
+            "family_id": family_id,
+            "id": edge_id,
+        },
+        {"_id": 0},
+    )
+    if not edge:
+        raise HTTPException(status_code=404, detail="Edge not found in family")
+    return edge
+
+
 @app.post("/api/auth/register")
 def auth_register(body: RegisterRequest, request: Request) -> dict:
+    clean_elder_display_name = body.elder_display_name.strip()
     try:
         user = register_user(body.email, body.password, body.name)
+        family_id = ""
+        elder_person_id = ""
+        # Backward compatibility: if older clients still pass elder details at signup,
+        # create elder-root family here; otherwise create it later via dedicated endpoint.
+        if clean_elder_display_name:
+            if not body.elder_consent:
+                raise HTTPException(status_code=400, detail="Elder consent is required")
+            family_id, elder_person_id = _create_elder_root_family(
+                str(user.get("id") or ""),
+                elder_display_name=clean_elder_display_name,
+                elder_birth_year=body.elder_birth_year,
+                elder_age_range=body.elder_age_range.strip(),
+                elder_preferred_language=body.elder_preferred_language.strip(),
+                elder_home_region=body.elder_home_region.strip(),
+                elder_consent=body.elder_consent,
+            )
         user_agent, remote_ip = _request_client_meta(request)
         tokens = create_session(user, user_agent=user_agent, ip_address=remote_ip)
     except AuthError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return {
+    response = {
         "user": public_user(user),
         **tokens,
     }
+    if family_id and elder_person_id:
+        response["family_id"] = family_id
+        response["elder_person_id"] = elder_person_id
+    return response
 
 
 @app.post("/api/auth/login")
@@ -164,6 +416,319 @@ def auth_logout(body: LogoutRequest) -> dict:
 @app.get("/api/auth/me")
 def auth_me(user: dict = Depends(get_current_user)) -> dict:
     return {"user": public_user(user)}
+
+
+@app.post("/api/families/elder-root")
+def create_elder_root_family(body: CreateElderRootRequest, user: dict = Depends(get_current_user)) -> dict:
+    if not body.consent:
+        raise HTTPException(status_code=400, detail="Elder consent is required")
+
+    owner_user_id = _user_id(user)
+    existing = family_people_collection().find_one(
+        {"owner_user_id": owner_user_id, "is_elder_root": True},
+        {"_id": 0, "family_id": 1, "id": 1},
+    )
+    if existing:
+        return {
+            "family_id": str(existing.get("family_id") or ""),
+            "elder_person_id": str(existing.get("id") or ""),
+            "created": False,
+        }
+
+    family_id, elder_person_id = _create_elder_root_family(
+        owner_user_id,
+        elder_display_name=body.display_name.strip(),
+        elder_birth_year=body.birth_year,
+        elder_age_range=body.age_range.strip(),
+        elder_preferred_language=body.preferred_language.strip(),
+        elder_home_region=body.home_region.strip(),
+        elder_consent=body.consent,
+    )
+
+    return {
+        "family_id": family_id,
+        "elder_person_id": elder_person_id,
+        "created": True,
+    }
+
+
+@app.get("/api/families/{family_id}/tree")
+def get_family_tree(family_id: str, user: dict = Depends(get_current_user)) -> dict:
+    owner_user_id = _user_id(user)
+    elder = _family_elder_root_or_404(owner_user_id, family_id)
+    people = list(
+        family_people_collection().find(
+            {"owner_user_id": owner_user_id, "family_id": family_id},
+            {"_id": 0},
+        )
+    )
+    edges = list(
+        family_edges_collection().find(
+            {"owner_user_id": owner_user_id, "family_id": family_id},
+            {"_id": 0},
+        )
+    )
+    return {
+        "family_id": family_id,
+        "elder_person_id": str(elder.get("id") or ""),
+        "people": people,
+        "edges": edges,
+    }
+
+
+@app.post("/api/families/{family_id}/people_with_edge")
+def create_person_with_edge(
+    family_id: str,
+    body: CreatePersonWithEdgeRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    owner_user_id = _user_id(user)
+    _family_elder_root_or_404(owner_user_id, family_id)
+    connect_to = _person_in_family_or_404(owner_user_id, family_id, body.connect_to_person_id)
+
+    now = now_iso()
+    person_id = str(uuid4())
+    person_doc = {
+        "id": person_id,
+        "owner_user_id": owner_user_id,
+        "family_id": family_id,
+        "is_elder_root": False,
+        "display_name": body.display_name.strip(),
+        "given_name": body.given_name.strip(),
+        "family_name": body.family_name.strip(),
+        "sex": body.sex,
+        "birth_year": body.birth_year,
+        "death_year": body.death_year,
+        "notes": body.notes.strip(),
+        "created_at": now,
+        "updated_at": now,
+    }
+    family_people_collection().insert_one(person_doc)
+
+    created_people: list[dict] = [person_doc]
+    edge_docs: list[dict] = []
+
+    relationship = body.relationship
+    if relationship == "child":
+        edge_docs.append(
+            _build_edge_doc(
+                owner_user_id,
+                family_id,
+                kind="parent_child",
+                from_person_id=str(connect_to.get("id") or ""),
+                to_person_id=person_id,
+                relationship_type=body.relationship_type,
+                certainty=body.certainty,
+            )
+        )
+    elif relationship == "parent":
+        edge_docs.append(
+            _build_edge_doc(
+                owner_user_id,
+                family_id,
+                kind="parent_child",
+                from_person_id=person_id,
+                to_person_id=str(connect_to.get("id") or ""),
+                relationship_type=body.relationship_type,
+                certainty=body.certainty,
+            )
+        )
+    elif relationship == "partner":
+        _validate_edge_years(body.start_year, body.end_year)
+        edge_docs.append(
+            _build_edge_doc(
+                owner_user_id,
+                family_id,
+                kind="partner",
+                from_person_id=str(connect_to.get("id") or ""),
+                to_person_id=person_id,
+                partner_type=body.partner_type,
+                certainty=body.certainty,
+                start_year=body.start_year,
+                end_year=body.end_year,
+            )
+        )
+    else:
+        placeholder_id = str(uuid4())
+        placeholder_doc = {
+            "id": placeholder_id,
+            "owner_user_id": owner_user_id,
+            "family_id": family_id,
+            "is_elder_root": False,
+            "display_name": f"Unknown Parent of {str(connect_to.get('display_name') or 'Person')}",
+            "given_name": "",
+            "family_name": "",
+            "sex": "unknown",
+            "birth_year": None,
+            "death_year": None,
+            "notes": "Auto-created placeholder for sibling relationship.",
+            "created_at": now,
+            "updated_at": now,
+        }
+        family_people_collection().insert_one(placeholder_doc)
+        created_people.append(placeholder_doc)
+        edge_docs.append(
+            _build_edge_doc(
+                owner_user_id,
+                family_id,
+                kind="parent_child",
+                from_person_id=placeholder_id,
+                to_person_id=str(connect_to.get("id") or ""),
+                relationship_type="unknown",
+                certainty="unknown",
+            )
+        )
+        edge_docs.append(
+            _build_edge_doc(
+                owner_user_id,
+                family_id,
+                kind="parent_child",
+                from_person_id=placeholder_id,
+                to_person_id=person_id,
+                relationship_type=body.relationship_type,
+                certainty=body.certainty,
+            )
+        )
+
+    if edge_docs:
+        family_edges_collection().insert_many(edge_docs)
+
+    return {
+        "family_id": family_id,
+        "created_people": [_strip_mongo_id(doc) for doc in created_people],
+        "created_edges": [_strip_mongo_id(doc) for doc in edge_docs],
+    }
+
+
+@app.patch("/api/families/{family_id}/people/{person_id}")
+def update_family_person(
+    family_id: str,
+    person_id: str,
+    body: UpdateFamilyPersonRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    owner_user_id = _user_id(user)
+    existing = _person_in_family_or_404(owner_user_id, family_id, person_id)
+
+    updates: dict[str, object] = {}
+    supplied = body.model_fields_set
+
+    if "display_name" in supplied:
+        clean_display_name = (body.display_name or "").strip()
+        if not clean_display_name:
+            raise HTTPException(status_code=400, detail="display_name cannot be empty")
+        updates["display_name"] = clean_display_name
+    if "given_name" in supplied:
+        updates["given_name"] = (body.given_name or "").strip()
+    if "family_name" in supplied:
+        updates["family_name"] = (body.family_name or "").strip()
+    if "sex" in supplied:
+        updates["sex"] = body.sex or "unknown"
+    if "birth_year" in supplied:
+        updates["birth_year"] = body.birth_year
+    if "death_year" in supplied:
+        updates["death_year"] = body.death_year
+    if "notes" in supplied:
+        updates["notes"] = (body.notes or "").strip()
+    if "age_range" in supplied:
+        updates["age_range"] = (body.age_range or "").strip()
+    if "preferred_language" in supplied:
+        updates["preferred_language"] = (body.preferred_language or "").strip()
+    if "home_region" in supplied:
+        updates["home_region"] = (body.home_region or "").strip()
+    if "consent" in supplied:
+        updates["consent"] = bool(body.consent)
+
+    if not updates:
+        return {"person": existing}
+
+    updates["updated_at"] = now_iso()
+    family_people_collection().update_one(
+        {"owner_user_id": owner_user_id, "family_id": family_id, "id": person_id},
+        {"$set": updates},
+    )
+    updated = _person_in_family_or_404(owner_user_id, family_id, person_id)
+    return {"person": updated}
+
+
+@app.delete("/api/families/{family_id}/people/{person_id}")
+def delete_family_person(
+    family_id: str,
+    person_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    owner_user_id = _user_id(user)
+    person = _person_in_family_or_404(owner_user_id, family_id, person_id)
+    if bool(person.get("is_elder_root")):
+        raise HTTPException(status_code=400, detail="Cannot delete elder root person")
+
+    person_result = family_people_collection().delete_one(
+        {"owner_user_id": owner_user_id, "family_id": family_id, "id": person_id}
+    )
+    edges_result = family_edges_collection().delete_many(
+        {
+            "owner_user_id": owner_user_id,
+            "family_id": family_id,
+            "$or": [{"from_person_id": person_id}, {"to_person_id": person_id}],
+        }
+    )
+    return {
+        "deleted": person_result.deleted_count == 1,
+        "edges_deleted": int(edges_result.deleted_count),
+    }
+
+
+@app.post("/api/families/{family_id}/edges")
+def create_family_edge(
+    family_id: str,
+    body: CreateFamilyEdgeRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    owner_user_id = _user_id(user)
+    _family_elder_root_or_404(owner_user_id, family_id)
+    _person_in_family_or_404(owner_user_id, family_id, body.from_person_id)
+    _person_in_family_or_404(owner_user_id, family_id, body.to_person_id)
+
+    if body.from_person_id == body.to_person_id:
+        raise HTTPException(status_code=400, detail="Edge endpoints must be different people")
+    _validate_edge_years(body.start_year, body.end_year)
+    if _edge_exists(
+        owner_user_id,
+        family_id,
+        kind=body.kind,
+        from_person_id=body.from_person_id,
+        to_person_id=body.to_person_id,
+    ):
+        raise HTTPException(status_code=409, detail="An equivalent relationship edge already exists")
+
+    edge_doc = _build_edge_doc(
+        owner_user_id,
+        family_id,
+        kind=body.kind,
+        from_person_id=body.from_person_id,
+        to_person_id=body.to_person_id,
+        relationship_type=body.relationship_type,
+        partner_type=body.partner_type,
+        certainty=body.certainty,
+        start_year=body.start_year,
+        end_year=body.end_year,
+    )
+    family_edges_collection().insert_one(edge_doc)
+    return {"edge": _strip_mongo_id(edge_doc)}
+
+
+@app.delete("/api/families/{family_id}/edges/{edge_id}")
+def delete_family_edge(
+    family_id: str,
+    edge_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    owner_user_id = _user_id(user)
+    _edge_in_family_or_404(owner_user_id, family_id, edge_id)
+    result = family_edges_collection().delete_one(
+        {"owner_user_id": owner_user_id, "family_id": family_id, "id": edge_id}
+    )
+    return {"deleted": result.deleted_count == 1}
 
 
 def _gridfs_bucket() -> GridFSBucket:

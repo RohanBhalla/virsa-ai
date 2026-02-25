@@ -1,8 +1,13 @@
 import { type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE,
+  addPersonWithEdge,
+  createFamilyEdge,
   createMemory,
+  deleteFamilyEdge,
+  deleteFamilyPerson,
   fetchProtectedBlob,
+  getFamilyTree,
   generateCover,
   generateStory,
   getMe,
@@ -12,18 +17,21 @@ import {
   logout,
   refreshAuth,
   register,
+  createElderRootFamily,
   searchStories,
   searchStoriesWithAudio,
   setAccessToken,
   toAssetUrl,
   transcribeMemory,
+  updateFamilyPerson,
 } from './api'
 import { MemoryMapView } from './components/MemoryMapView'
 import { Recorder } from './components/Recorder'
+import { FamilyGraphView } from './components/FamilyGraphView'
 import virasatLogo from './assets/virasat-logo.png'
-import type { Memory, TranscriptWord, User } from './types'
+import type { FamilyTree, Memory, TranscriptWord, User } from './types'
 
-type View = 'home' | 'record' | 'detail' | 'account' | 'memory-map'
+type View = 'home' | 'record' | 'detail' | 'account' | 'memory-map' | 'family-tree' | 'family-graph'
 type AuthMode = 'login' | 'signup'
 
 const ACCESS_TOKEN_KEY = 'virsa_access_token'
@@ -34,6 +42,8 @@ function parseHash(): { view: View; id?: string } {
   if (!hash || hash === '/') return { view: 'home' }
   if (hash === '/record') return { view: 'record' }
   if (hash === '/memory-map') return { view: 'memory-map' }
+  if (hash === '/family-tree') return { view: 'family-tree' }
+  if (hash === '/family-graph') return { view: 'family-graph' }
   if (hash === '/account') return { view: 'account' }
   if (hash.startsWith('/recordings/')) {
     const id = hash.split('/')[2]
@@ -241,6 +251,62 @@ export default function App() {
   const [recordStatus, setRecordStatus] = useState('')
   const [recordError, setRecordError] = useState('')
   const [isSavingRecord, setIsSavingRecord] = useState(false)
+  const [familyTree, setFamilyTree] = useState<FamilyTree | null>(null)
+  const [familyTreeLoading, setFamilyTreeLoading] = useState(false)
+  const [familyTreeError, setFamilyTreeError] = useState('')
+  const [newRelativeName, setNewRelativeName] = useState('')
+  const [relatedToPersonId, setRelatedToPersonId] = useState('')
+  const [newRelationship, setNewRelationship] = useState<'child' | 'parent' | 'partner' | 'sibling'>('child')
+  const [newRelationshipType, setNewRelationshipType] = useState<
+    'biological' | 'adoptive' | 'step' | 'guardian' | 'unknown'
+  >('unknown')
+  const [newPartnerType, setNewPartnerType] = useState<'married' | 'partner' | 'divorced' | 'separated' | 'unknown'>(
+    'unknown'
+  )
+  const [newCertainty, setNewCertainty] = useState<'certain' | 'estimated' | 'unknown'>('unknown')
+  const [addingRelative, setAddingRelative] = useState(false)
+  const [editingPersonId, setEditingPersonId] = useState('')
+  const [editDisplayName, setEditDisplayName] = useState('')
+  const [editGivenName, setEditGivenName] = useState('')
+  const [editFamilyName, setEditFamilyName] = useState('')
+  const [editSex, setEditSex] = useState<'female' | 'male' | 'other' | 'unknown'>('unknown')
+  const [editBirthYear, setEditBirthYear] = useState('')
+  const [editDeathYear, setEditDeathYear] = useState('')
+  const [editNotes, setEditNotes] = useState('')
+  const [editAgeRange, setEditAgeRange] = useState('')
+  const [editPreferredLanguage, setEditPreferredLanguage] = useState('')
+  const [editHomeRegion, setEditHomeRegion] = useState('')
+  const [editConsent, setEditConsent] = useState(false)
+  const [savingPersonEdit, setSavingPersonEdit] = useState(false)
+  const [deletingPersonId, setDeletingPersonId] = useState('')
+  const [deletingEdgeId, setDeletingEdgeId] = useState('')
+  const [linkFromPersonId, setLinkFromPersonId] = useState('')
+  const [linkToPersonId, setLinkToPersonId] = useState('')
+  const [linkKind, setLinkKind] = useState<'parent_child' | 'partner'>('parent_child')
+  const [linkRelationshipType, setLinkRelationshipType] = useState<
+    'biological' | 'adoptive' | 'step' | 'guardian' | 'unknown'
+  >('unknown')
+  const [linkPartnerType, setLinkPartnerType] = useState<'married' | 'partner' | 'divorced' | 'separated' | 'unknown'>(
+    'unknown'
+  )
+  const [linkCertainty, setLinkCertainty] = useState<'certain' | 'estimated' | 'unknown'>('unknown')
+  const [linkingEdge, setLinkingEdge] = useState(false)
+  const [elderModalOpen, setElderModalOpen] = useState(false)
+  const [elderSubmitting, setElderSubmitting] = useState(false)
+  const [elderSetupError, setElderSetupError] = useState('')
+  const [elderDisplayName, setElderDisplayName] = useState('')
+  const [elderBirthYear, setElderBirthYear] = useState('')
+  const [elderAgeRange, setElderAgeRange] = useState('')
+  const [elderPreferredLanguage, setElderPreferredLanguage] = useState('')
+  const [elderHomeRegion, setElderHomeRegion] = useState('')
+  const [elderConsent, setElderConsent] = useState(false)
+  const [familyActionNotice, setFamilyActionNotice] = useState('')
+  const [familyActionNoticeKind, setFamilyActionNoticeKind] = useState<'success' | 'error'>('success')
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false)
+  const [confirmDeleteType, setConfirmDeleteType] = useState<'person' | 'edge' | ''>('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState('')
+  const [confirmDeleteLabel, setConfirmDeleteLabel] = useState('')
+  const [confirmDeleting, setConfirmDeleting] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'covers' | 'stories'>('all')
   const [searchExpanded, setSearchExpanded] = useState(false)
@@ -258,6 +324,7 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const lyricLineRefs = useRef<Array<HTMLButtonElement | null>>([])
   const profileMenuRef = useRef<HTMLDivElement | null>(null)
+  const familyId = (authUser?.default_family_id || '').trim()
 
   function persistAuth(accessToken: string, nextRefreshToken: string) {
     localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
@@ -337,11 +404,47 @@ export default function App() {
   }, [route.view, searchExpanded])
 
   useEffect(() => {
+    if (route.view !== 'family-tree') return
+    if (!familyId) {
+      setFamilyTree(null)
+      setFamilyTreeError('No elder-root family found yet. Set up an elder to start your family tree.')
+      return
+    }
+    let cancelled = false
+    setFamilyTreeLoading(true)
+    setFamilyTreeError('')
+    getFamilyTree(familyId)
+      .then((data) => {
+        if (cancelled) return
+        setFamilyTree(data)
+        setRelatedToPersonId((prev) => prev || data.elder_person_id)
+        setLinkFromPersonId((prev) => prev || data.elder_person_id)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setFamilyTree(null)
+        setFamilyTreeError(err instanceof Error ? err.message : 'Unable to load family tree')
+      })
+      .finally(() => {
+        if (!cancelled) setFamilyTreeLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [route.view, familyId])
+
+  useEffect(() => {
     if (!search.trim()) {
       setSearchApiResults(null)
       setLastSearchQuery('')
     }
   }, [search])
+
+  useEffect(() => {
+    if (!familyActionNotice) return
+    const timer = window.setTimeout(() => setFamilyActionNotice(''), 3000)
+    return () => window.clearTimeout(timer)
+  }, [familyActionNotice])
 
   async function runTextSearch() {
     const q = search.trim()
@@ -553,6 +656,77 @@ export default function App() {
       : 'Tap to speak your search'
   const wallId = 'cover-wall-strip'
 
+  const generationBuckets = useMemo(() => {
+    if (!familyTree) return []
+
+    const peopleById = new Map(familyTree.people.map((person) => [person.id, person]))
+    const queue: string[] = [familyTree.elder_person_id]
+    const levels = new Map<string, number>([[familyTree.elder_person_id, 0]])
+
+    while (queue.length > 0) {
+      const current = queue.shift() as string
+      const level = levels.get(current) ?? 0
+      for (const edge of familyTree.edges) {
+        if (edge.kind === 'parent_child') {
+          if (edge.from_person_id === current && !levels.has(edge.to_person_id)) {
+            levels.set(edge.to_person_id, level + 1)
+            queue.push(edge.to_person_id)
+          }
+          if (edge.to_person_id === current && !levels.has(edge.from_person_id)) {
+            levels.set(edge.from_person_id, level - 1)
+            queue.push(edge.from_person_id)
+          }
+        }
+        if (edge.kind === 'partner') {
+          if (edge.from_person_id === current && !levels.has(edge.to_person_id)) {
+            levels.set(edge.to_person_id, level)
+            queue.push(edge.to_person_id)
+          }
+          if (edge.to_person_id === current && !levels.has(edge.from_person_id)) {
+            levels.set(edge.from_person_id, level)
+            queue.push(edge.from_person_id)
+          }
+        }
+      }
+    }
+
+    const bucketMap = new Map<number, Array<{ id: string; level: number }>>()
+    for (const person of familyTree.people) {
+      const level = levels.get(person.id) ?? 99
+      const row = bucketMap.get(level) ?? []
+      row.push({ id: person.id, level })
+      bucketMap.set(level, row)
+    }
+
+    return Array.from(bucketMap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([level, members]) => ({
+        level,
+        members: members
+          .map(({ id }) => peopleById.get(id))
+          .filter((person): person is NonNullable<typeof person> => Boolean(person))
+          .sort((a, b) => a.display_name.localeCompare(b.display_name)),
+      }))
+  }, [familyTree])
+
+  const linkEdgeDuplicate = useMemo(() => {
+    if (!familyTree) return false
+    const fromId = linkFromPersonId || familyTree.elder_person_id
+    const toId = linkToPersonId
+    if (!fromId || !toId || fromId === toId) return false
+
+    return familyTree.edges.some((edge) => {
+      if (edge.kind !== linkKind) return false
+      if (linkKind === 'partner') {
+        return (
+          (edge.from_person_id === fromId && edge.to_person_id === toId) ||
+          (edge.from_person_id === toId && edge.to_person_id === fromId)
+        )
+      }
+      return edge.from_person_id === fromId && edge.to_person_id === toId
+    })
+  }, [familyTree, linkFromPersonId, linkToPersonId, linkKind])
+
   useEffect(() => {
     lyricLineRefs.current = []
     setPlayheadSeconds(0)
@@ -598,6 +772,296 @@ export default function App() {
     animateScrollByX(rail, rail.clientWidth * 0.9)
   }
 
+  function openElderSetupModal() {
+    setElderSetupError('')
+    setElderDisplayName('')
+    setElderBirthYear('')
+    setElderAgeRange('')
+    setElderPreferredLanguage('')
+    setElderHomeRegion('')
+    setElderConsent(false)
+    setElderModalOpen(true)
+  }
+
+  async function submitElderSetupForm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const cleanDisplayName = elderDisplayName.trim()
+    if (!cleanDisplayName) {
+      setElderSetupError('Elder display name is required.')
+      return
+    }
+    if (!elderConsent) {
+      setElderSetupError('Please confirm elder consent to continue.')
+      return
+    }
+
+    let parsedBirthYear: number | undefined
+    const birthYearInput = elderBirthYear.trim()
+    if (birthYearInput) {
+      const maybeYear = Number(birthYearInput)
+      if (!Number.isInteger(maybeYear) || maybeYear < 1800 || maybeYear > 2100) {
+        setElderSetupError('Birth year must be between 1800 and 2100.')
+        return
+      }
+      parsedBirthYear = maybeYear
+    }
+
+    setElderSubmitting(true)
+    setElderSetupError('')
+    try {
+      await createElderRootFamily({
+        display_name: cleanDisplayName,
+        birth_year: parsedBirthYear,
+        age_range: elderAgeRange.trim(),
+        preferred_language: elderPreferredLanguage.trim(),
+        home_region: elderHomeRegion.trim(),
+        consent: true,
+      })
+      const me = await getMe()
+      setAuthUser(me)
+      setElderModalOpen(false)
+      setFamilyActionNoticeKind('success')
+      setFamilyActionNotice('Elder profile created successfully.')
+    } catch (err) {
+      setElderSetupError(err instanceof Error ? err.message : 'Failed to set up elder')
+    } finally {
+      setElderSubmitting(false)
+    }
+  }
+
+  async function submitAddRelative(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!familyId || !familyTree) return
+    const cleanName = newRelativeName.trim()
+    const connectTo = relatedToPersonId || familyTree.elder_person_id
+    if (!cleanName || !connectTo) return
+
+    setAddingRelative(true)
+    setFamilyTreeError('')
+    try {
+      await addPersonWithEdge(familyId, {
+        display_name: cleanName,
+        connect_to_person_id: connectTo,
+        relationship: newRelationship,
+        relationship_type: newRelationshipType,
+        partner_type: newPartnerType,
+        certainty: newCertainty,
+      })
+      const updated = await getFamilyTree(familyId)
+      setFamilyTree(updated)
+      setRelatedToPersonId(updated.elder_person_id)
+      setNewRelativeName('')
+      setNewRelationship('child')
+      setNewRelationshipType('unknown')
+      setNewPartnerType('unknown')
+      setNewCertainty('unknown')
+      setFamilyActionNoticeKind('success')
+      setFamilyActionNotice(
+        newRelationship === 'sibling'
+          ? 'Sibling added. A placeholder parent was created for the sibling link.'
+          : 'Relative added successfully.'
+      )
+    } catch (err) {
+      setFamilyTreeError(err instanceof Error ? err.message : 'Failed to add relative')
+    } finally {
+      setAddingRelative(false)
+    }
+  }
+
+  function startEditPerson(person: FamilyTree['people'][number]) {
+    const personId = person.id
+    setEditingPersonId(personId)
+    setEditDisplayName(person.display_name || '')
+    setEditGivenName(person.given_name || '')
+    setEditFamilyName(person.family_name || '')
+    setEditSex(person.sex || 'unknown')
+    setEditBirthYear(person.birth_year != null ? String(person.birth_year) : '')
+    setEditDeathYear(person.death_year != null ? String(person.death_year) : '')
+    setEditNotes(person.notes || '')
+    setEditAgeRange((person as { age_range?: string }).age_range || '')
+    setEditPreferredLanguage((person as { preferred_language?: string }).preferred_language || '')
+    setEditHomeRegion((person as { home_region?: string }).home_region || '')
+    setEditConsent(Boolean((person as { consent?: boolean }).consent))
+  }
+
+  function cancelEditPerson() {
+    setEditingPersonId('')
+    setEditDisplayName('')
+    setEditGivenName('')
+    setEditFamilyName('')
+    setEditSex('unknown')
+    setEditBirthYear('')
+    setEditDeathYear('')
+    setEditNotes('')
+    setEditAgeRange('')
+    setEditPreferredLanguage('')
+    setEditHomeRegion('')
+    setEditConsent(false)
+  }
+
+  async function savePersonEdit(personId: string) {
+    if (!familyId) return
+    const cleanName = editDisplayName.trim()
+    if (!cleanName) {
+      setFamilyTreeError('Display name is required.')
+      return
+    }
+    setSavingPersonEdit(true)
+    setFamilyTreeError('')
+    try {
+      const parseYearOrNull = (value: string): number | null => {
+        const clean = value.trim()
+        if (!clean) return null
+        const year = Number(clean)
+        if (!Number.isInteger(year) || year < 1800 || year > 2100) {
+          throw new Error('Year values must be integers between 1800 and 2100.')
+        }
+        return year
+      }
+
+      await updateFamilyPerson(familyId, personId, {
+        display_name: cleanName,
+        given_name: editGivenName.trim(),
+        family_name: editFamilyName.trim(),
+        sex: editSex,
+        birth_year: parseYearOrNull(editBirthYear),
+        death_year: parseYearOrNull(editDeathYear),
+        notes: editNotes.trim(),
+        age_range: editAgeRange.trim(),
+        preferred_language: editPreferredLanguage.trim(),
+        home_region: editHomeRegion.trim(),
+        consent: editConsent,
+      })
+      const updated = await getFamilyTree(familyId)
+      setFamilyTree(updated)
+      cancelEditPerson()
+      setFamilyActionNoticeKind('success')
+      setFamilyActionNotice('Person updated successfully.')
+    } catch (err) {
+      setFamilyTreeError(err instanceof Error ? err.message : 'Failed to update person')
+    } finally {
+      setSavingPersonEdit(false)
+    }
+  }
+
+  async function handleDeletePerson(personId: string) {
+    if (!familyId) return
+
+    setDeletingPersonId(personId)
+    setFamilyTreeError('')
+    try {
+      await deleteFamilyPerson(familyId, personId)
+      const updated = await getFamilyTree(familyId)
+      setFamilyTree(updated)
+      if (editingPersonId === personId) cancelEditPerson()
+      setFamilyActionNoticeKind('success')
+      setFamilyActionNotice('Member deleted successfully.')
+    } catch (err) {
+      setFamilyTreeError(err instanceof Error ? err.message : 'Failed to delete person')
+    } finally {
+      setDeletingPersonId('')
+    }
+  }
+
+  async function handleDeleteEdge(edgeId: string) {
+    if (!familyId) return
+    setDeletingEdgeId(edgeId)
+    setFamilyTreeError('')
+    try {
+      await deleteFamilyEdge(familyId, edgeId)
+      const updated = await getFamilyTree(familyId)
+      setFamilyTree(updated)
+      setFamilyActionNoticeKind('success')
+      setFamilyActionNotice('Relationship deleted successfully.')
+    } catch (err) {
+      setFamilyTreeError(err instanceof Error ? err.message : 'Failed to delete relationship')
+    } finally {
+      setDeletingEdgeId('')
+    }
+  }
+
+  async function submitLinkExistingPeople(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!familyId || !familyTree) return
+    const fromId = linkFromPersonId || familyTree.elder_person_id
+    const toId = linkToPersonId
+    if (!toId) {
+      setFamilyTreeError('Select both people to create a relationship.')
+      return
+    }
+    if (fromId === toId) {
+      setFamilyTreeError('Choose two different people for a relationship.')
+      return
+    }
+
+    setLinkingEdge(true)
+    setFamilyTreeError('')
+    try {
+      await createFamilyEdge(familyId, {
+        kind: linkKind,
+        from_person_id: fromId,
+        to_person_id: toId,
+        relationship_type: linkRelationshipType,
+        partner_type: linkPartnerType,
+        certainty: linkCertainty,
+      })
+      const updated = await getFamilyTree(familyId)
+      setFamilyTree(updated)
+      setLinkToPersonId('')
+      setLinkKind('parent_child')
+      setLinkRelationshipType('unknown')
+      setLinkPartnerType('unknown')
+      setLinkCertainty('unknown')
+      setFamilyActionNoticeKind('success')
+      setFamilyActionNotice('Relationship created successfully.')
+    } catch (err) {
+      setFamilyTreeError(err instanceof Error ? err.message : 'Failed to create relationship')
+    } finally {
+      setLinkingEdge(false)
+    }
+  }
+
+  function requestDeletePerson(personId: string, displayName: string) {
+    setConfirmDeleteType('person')
+    setConfirmDeleteId(personId)
+    setConfirmDeleteLabel(displayName)
+    setConfirmModalOpen(true)
+  }
+
+  function requestDeleteEdge(edgeId: string, label: string) {
+    setConfirmDeleteType('edge')
+    setConfirmDeleteId(edgeId)
+    setConfirmDeleteLabel(label)
+    setConfirmModalOpen(true)
+  }
+
+  async function confirmDeleteAction() {
+    if (!confirmDeleteType || !confirmDeleteId) return
+    setConfirmDeleting(true)
+    try {
+      if (confirmDeleteType === 'person') {
+        await handleDeletePerson(confirmDeleteId)
+      } else {
+        await handleDeleteEdge(confirmDeleteId)
+      }
+      setConfirmModalOpen(false)
+      setConfirmDeleteType('')
+      setConfirmDeleteId('')
+      setConfirmDeleteLabel('')
+    } finally {
+      setConfirmDeleting(false)
+    }
+  }
+
+  function handleRelationshipSelection(nextRelationship: 'child' | 'parent' | 'partner' | 'sibling') {
+    setNewRelationship(nextRelationship)
+    if (nextRelationship === 'partner') {
+      setNewRelationshipType('unknown')
+    } else {
+      setNewPartnerType('unknown')
+    }
+  }
+
   async function submitAuthForm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setAuthLoading(true)
@@ -615,6 +1079,9 @@ export default function App() {
 
       persistAuth(result.access_token, result.refresh_token)
       setAuthUser(result.user)
+      if (authMode === 'signup') {
+        openElderSetupModal()
+      }
       setAuthPassword('')
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Authentication failed')
@@ -688,7 +1155,7 @@ export default function App() {
     const isSignup = authMode === 'signup'
     const canSubmit =
       !!authEmail.trim() &&
-      authPassword.length >= 10 &&
+      (isSignup ? authPassword.length >= 10 : authPassword.length > 0) &&
       (!isSignup || !!authName.trim()) &&
       !authLoading
 
@@ -756,7 +1223,7 @@ export default function App() {
             </button>
           </form>
 
-          <p className="meta auth-note">Password must be at least 10 characters.</p>
+          {isSignup ? <p className="meta auth-note">Password must be at least 10 characters.</p> : null}
           {authError ? <p className="error-text">{authError}</p> : null}
         </section>
       </main>
@@ -819,6 +1286,15 @@ export default function App() {
         <div className="view-shell">
           <CoverRail title="Recommended Stories" items={recommended} />
           <CoverRail title="Recent Stories" items={recent} />
+          <section className="panel family-tree-cta">
+            <div>
+              <h2>Family Tree</h2>
+              <p className="meta">Build and explore your elder-root family graph.</p>
+            </div>
+            <button type="button" className="record-save-button" onClick={() => navigate('/family-tree')}>
+              View Family Tree
+            </button>
+          </section>
 
           <section className="panel">
             <div className="section-head">
@@ -908,8 +1384,471 @@ export default function App() {
         </div>
       ) : null}
 
+      {route.view === 'family-tree' ? (
+        <div className="view-shell family-tree-view spring-scroll">
+          <section className="panel family-tree-panel">
+            <div className="section-head">
+              <h2>Family Tree</h2>
+              <div className="family-tree-head-actions">
+                <button type="button" className="btn" onClick={() => navigate('/family-graph')} disabled={!familyId}>
+                  Graph View
+                </button>
+                <button type="button" className="btn btn-primary detail-back" onClick={() => navigate('/')}>
+                  Back Home
+                </button>
+              </div>
+            </div>
+            {familyActionNotice ? (
+              <p className={`status-banner ${familyActionNoticeKind === 'error' ? 'error' : 'success'}`}>
+                {familyActionNotice}
+              </p>
+            ) : null}
+            {familyTreeLoading ? <p className="meta">Loading family tree...</p> : null}
+            {familyTreeError ? <p className="error-text">{familyTreeError}</p> : null}
+            {!familyTreeLoading && !familyId ? (
+              <button
+                type="button"
+                className="record-save-button"
+                onClick={openElderSetupModal}
+              >
+                Set Up Elder
+              </button>
+            ) : null}
+            {familyTree ? (
+              <>
+                <div className="family-tree-grid spring-scroll">
+                  {generationBuckets.map((bucket) => (
+                    <section key={`gen-${bucket.level}`} className="family-gen-column">
+                      <h3>
+                        {bucket.level === 0
+                          ? 'Elder'
+                          : bucket.level < 0
+                            ? `Ancestors ${Math.abs(bucket.level)}`
+                            : bucket.level === 99
+                              ? 'Unplaced'
+                              : `Descendants ${bucket.level}`}
+                      </h3>
+                      <div className="family-gen-list">
+                        {bucket.members.map((person) => {
+                          const childCount = familyTree.edges.filter(
+                            (edge) => edge.kind === 'parent_child' && edge.from_person_id === person.id
+                          ).length
+                          const partnerCount = familyTree.edges.filter(
+                            (edge) =>
+                              edge.kind === 'partner' &&
+                              (edge.from_person_id === person.id || edge.to_person_id === person.id)
+                          ).length
+                          return (
+                            <article key={person.id} className={`family-person-card ${person.is_elder_root ? 'elder' : ''}`}>
+                              {editingPersonId === person.id ? (
+                                <div className="person-edit-form">
+                                  <input
+                                    type="text"
+                                    className="title-input"
+                                    placeholder="Display name"
+                                    value={editDisplayName}
+                                    onChange={(e) => setEditDisplayName(e.target.value)}
+                                  />
+                                  <input
+                                    type="text"
+                                    className="title-input"
+                                    placeholder="Given name"
+                                    value={editGivenName}
+                                    onChange={(e) => setEditGivenName(e.target.value)}
+                                  />
+                                  <input
+                                    type="text"
+                                    className="title-input"
+                                    placeholder="Family name"
+                                    value={editFamilyName}
+                                    onChange={(e) => setEditFamilyName(e.target.value)}
+                                  />
+                                  <select
+                                    className="title-input"
+                                    value={editSex}
+                                    onChange={(e) => setEditSex(e.target.value as 'female' | 'male' | 'other' | 'unknown')}
+                                  >
+                                    <option value="unknown">Sex: unknown</option>
+                                    <option value="female">Female</option>
+                                    <option value="male">Male</option>
+                                    <option value="other">Other</option>
+                                  </select>
+                                  <input
+                                    type="number"
+                                    min={1800}
+                                    max={2100}
+                                    className="title-input"
+                                    placeholder="Birth year"
+                                    value={editBirthYear}
+                                    onChange={(e) => setEditBirthYear(e.target.value)}
+                                  />
+                                  <input
+                                    type="number"
+                                    min={1800}
+                                    max={2100}
+                                    className="title-input"
+                                    placeholder="Death year"
+                                    value={editDeathYear}
+                                    onChange={(e) => setEditDeathYear(e.target.value)}
+                                  />
+                                  <input
+                                    type="text"
+                                    className="title-input"
+                                    placeholder="Age range"
+                                    value={editAgeRange}
+                                    onChange={(e) => setEditAgeRange(e.target.value)}
+                                  />
+                                  <input
+                                    type="text"
+                                    className="title-input"
+                                    placeholder="Preferred language"
+                                    value={editPreferredLanguage}
+                                    onChange={(e) => setEditPreferredLanguage(e.target.value)}
+                                  />
+                                  <input
+                                    type="text"
+                                    className="title-input"
+                                    placeholder="Home region"
+                                    value={editHomeRegion}
+                                    onChange={(e) => setEditHomeRegion(e.target.value)}
+                                  />
+                                  <textarea
+                                    className="title-input"
+                                    rows={3}
+                                    placeholder="Notes"
+                                    value={editNotes}
+                                    onChange={(e) => setEditNotes(e.target.value)}
+                                  />
+                                  <label className="consent-row">
+                                    <input
+                                      type="checkbox"
+                                      checked={editConsent}
+                                      onChange={(e) => setEditConsent(e.target.checked)}
+                                    />
+                                    <span>Consent confirmed</span>
+                                  </label>
+                                  <div className="person-edit-actions">
+                                    <button type="button" className="btn" onClick={cancelEditPerson} disabled={savingPersonEdit}>
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn family-danger-btn"
+                                      onClick={() => requestDeletePerson(person.id, person.display_name)}
+                                      disabled={savingPersonEdit || deletingPersonId === person.id || person.is_elder_root}
+                                    >
+                                      {deletingPersonId === person.id ? 'Deleting...' : 'Delete Member'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="record-save-button"
+                                      onClick={() => void savePersonEdit(person.id)}
+                                      disabled={savingPersonEdit || !editDisplayName.trim()}
+                                    >
+                                      {savingPersonEdit ? 'Saving...' : 'Save'}
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <strong>{person.display_name}</strong>
+                                  <p className="meta">
+                                    {person.birth_year ? `Born ${person.birth_year}` : 'Birth year unknown'}
+                                  </p>
+                                  <p className="meta">
+                                    Children: {childCount} | Partners: {partnerCount}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    className="btn family-inline-btn"
+                                    onClick={() => startEditPerson(person)}
+                                  >
+                                    Edit
+                                  </button>
+                                </>
+                              )}
+                            </article>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </section>
+          {familyTree ? (
+            <section className="panel family-add-panel">
+              <form className="family-add-form" onSubmit={submitAddRelative}>
+                <h3>Add Relative</h3>
+                <div className="form-step">
+                  <label className="form-step-label">1. What is this person&apos;s name?</label>
+                  <input
+                    type="text"
+                    className="title-input"
+                    placeholder="Relative name"
+                    value={newRelativeName}
+                    onChange={(e) => setNewRelativeName(e.target.value)}
+                  />
+                </div>
+
+                {newRelativeName.trim() ? (
+                  <div className="form-step">
+                    <label className="form-step-label">2. Who are they related to?</label>
+                    {familyTree.people.length === 1 ? (
+                      <p className="form-step-help">
+                        This is your first relative. They will be linked to {familyTree.people[0].display_name}.
+                      </p>
+                    ) : (
+                      <select
+                        className="title-input"
+                        value={relatedToPersonId || familyTree.elder_person_id}
+                        onChange={(e) => setRelatedToPersonId(e.target.value)}
+                      >
+                        {familyTree.people.map((person) => (
+                          <option key={person.id} value={person.id}>
+                            {person.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                ) : null}
+
+                {newRelativeName.trim() ? (
+                  <div className="form-step">
+                    <label className="form-step-label">3. How are they related?</label>
+                    <select
+                      className="title-input"
+                      value={newRelationship}
+                      onChange={(e) =>
+                        handleRelationshipSelection(e.target.value as 'child' | 'parent' | 'partner' | 'sibling')
+                      }
+                    >
+                      <option value="child">Child of</option>
+                      <option value="parent">Parent of</option>
+                      <option value="partner">Partner/Spouse of</option>
+                      <option value="sibling">Sibling of</option>
+                    </select>
+                    <p className="form-step-help">
+                      {newRelativeName.trim()} will be added as{' '}
+                      {newRelationship === 'partner' ? 'a partner/spouse' : `a ${newRelationship}`}{' '}
+                      of{' '}
+                      {familyTree.people.find((person) => person.id === (relatedToPersonId || familyTree.elder_person_id))
+                        ?.display_name || 'selected person'}
+                      .
+                    </p>
+                  </div>
+                ) : null}
+
+                {newRelativeName.trim() && newRelationship !== 'partner' ? (
+                  <div className="form-step">
+                    <label className="form-step-label">4. Relationship type</label>
+                    <select
+                      className="title-input"
+                      value={newRelationshipType}
+                      onChange={(e) =>
+                        setNewRelationshipType(
+                          e.target.value as 'biological' | 'adoptive' | 'step' | 'guardian' | 'unknown'
+                        )
+                      }
+                    >
+                      <option value="unknown">Unknown</option>
+                      <option value="biological">Biological</option>
+                      <option value="adoptive">Adoptive</option>
+                      <option value="step">Step</option>
+                      <option value="guardian">Guardian</option>
+                    </select>
+                  </div>
+                ) : null}
+
+                {newRelativeName.trim() && newRelationship === 'partner' ? (
+                  <div className="form-step">
+                    <label className="form-step-label">4. Partner/Spouse status</label>
+                    <select
+                      className="title-input"
+                      value={newPartnerType}
+                      onChange={(e) =>
+                        setNewPartnerType(
+                          e.target.value as 'married' | 'partner' | 'divorced' | 'separated' | 'unknown'
+                        )
+                      }
+                    >
+                      <option value="unknown">Unknown</option>
+                      <option value="married">Married</option>
+                      <option value="partner">Partner (not married)</option>
+                      <option value="separated">Separated</option>
+                      <option value="divorced">Divorced</option>
+                    </select>
+                  </div>
+                ) : null}
+
+                {newRelativeName.trim() ? (
+                  <div className="form-step">
+                    <label className="form-step-label">5. Certainty (optional)</label>
+                    <select
+                      className="title-input"
+                      value={newCertainty}
+                      onChange={(e) => setNewCertainty(e.target.value as 'certain' | 'estimated' | 'unknown')}
+                    >
+                      <option value="unknown">Unknown</option>
+                      <option value="certain">Certain</option>
+                      <option value="estimated">Estimated</option>
+                    </select>
+                  </div>
+                ) : null}
+                <button
+                  type="submit"
+                  className="record-save-button"
+                  disabled={addingRelative || !newRelativeName.trim()}
+                >
+                  {addingRelative ? 'Adding...' : 'Add Relative'}
+                </button>
+              </form>
+            </section>
+          ) : null}
+          {familyTree ? (
+            <section className="panel family-relations-panel">
+              <h3>Relationships</h3>
+              <div className="family-relations-list spring-scroll">
+                {familyTree.edges.length === 0 ? <p className="meta">No relationships yet.</p> : null}
+                {familyTree.edges.map((edge) => {
+                  const fromName =
+                    familyTree.people.find((person) => person.id === edge.from_person_id)?.display_name || edge.from_person_id
+                  const toName =
+                    familyTree.people.find((person) => person.id === edge.to_person_id)?.display_name || edge.to_person_id
+                  const relText =
+                    edge.kind === 'partner'
+                      ? `${fromName} ↔ ${toName} (${edge.partner_type || 'unknown'})`
+                      : `${fromName} → ${toName} (${edge.relationship_type || 'unknown'})`
+                  return (
+                    <div key={edge.id} className="family-relation-item">
+                      <p className="meta">{relText}</p>
+                      <button
+                        type="button"
+                        className="btn family-danger-btn"
+                        onClick={() => requestDeleteEdge(edge.id, relText)}
+                        disabled={deletingEdgeId === edge.id}
+                      >
+                        {deletingEdgeId === edge.id ? 'Deleting...' : 'Delete'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          ) : null}
+          {familyTree ? (
+            <section className="panel family-link-panel">
+              <h3>Link Existing People</h3>
+              <form className="family-link-form" onSubmit={submitLinkExistingPeople}>
+                <select
+                  className="title-input"
+                  value={linkFromPersonId || familyTree.elder_person_id}
+                  onChange={(e) => setLinkFromPersonId(e.target.value)}
+                >
+                  {familyTree.people.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      From: {person.display_name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="title-input"
+                  value={linkToPersonId}
+                  onChange={(e) => setLinkToPersonId(e.target.value)}
+                >
+                  <option value="">To person...</option>
+                  {familyTree.people.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.display_name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="title-input"
+                  value={linkKind}
+                  onChange={(e) => setLinkKind(e.target.value as 'parent_child' | 'partner')}
+                >
+                  <option value="parent_child">Parent → Child</option>
+                  <option value="partner">Partner ↔ Partner</option>
+                </select>
+                {linkKind === 'parent_child' ? (
+                  <select
+                    className="title-input"
+                    value={linkRelationshipType}
+                    onChange={(e) =>
+                      setLinkRelationshipType(
+                        e.target.value as 'biological' | 'adoptive' | 'step' | 'guardian' | 'unknown'
+                      )
+                    }
+                  >
+                    <option value="unknown">Relationship type: unknown</option>
+                    <option value="biological">Biological</option>
+                    <option value="adoptive">Adoptive</option>
+                    <option value="step">Step</option>
+                    <option value="guardian">Guardian</option>
+                  </select>
+                ) : (
+                  <select
+                    className="title-input"
+                    value={linkPartnerType}
+                    onChange={(e) =>
+                      setLinkPartnerType(
+                        e.target.value as 'married' | 'partner' | 'divorced' | 'separated' | 'unknown'
+                      )
+                    }
+                  >
+                    <option value="unknown">Partner type: unknown</option>
+                    <option value="married">Married</option>
+                    <option value="partner">Partner</option>
+                    <option value="separated">Separated</option>
+                    <option value="divorced">Divorced</option>
+                  </select>
+                )}
+                <select
+                  className="title-input"
+                  value={linkCertainty}
+                  onChange={(e) => setLinkCertainty(e.target.value as 'certain' | 'estimated' | 'unknown')}
+                >
+                  <option value="unknown">Certainty: unknown</option>
+                  <option value="certain">Certain</option>
+                  <option value="estimated">Estimated</option>
+                </select>
+                {linkEdgeDuplicate ? (
+                  <p className="meta">This relationship already exists for the selected people.</p>
+                ) : null}
+                <button
+                  type="submit"
+                  className="record-save-button"
+                  disabled={linkingEdge || !linkToPersonId || linkEdgeDuplicate}
+                >
+                  {linkingEdge ? 'Linking...' : 'Create Relationship'}
+                </button>
+              </form>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+
       {route.view === 'memory-map' ? (
         <MemoryMapView onNavigate={navigate} />
+      ) : null}
+
+      {route.view === 'family-graph' ? (
+        familyId ? (
+          <FamilyGraphView familyId={familyId} onBack={() => navigate('/family-tree')} />
+        ) : (
+          <div className="view-shell">
+            <section className="panel">
+              <h2>Family Graph</h2>
+              <p className="meta">Set up an elder profile before viewing the graph.</p>
+              <button type="button" className="record-save-button" onClick={openElderSetupModal}>
+                Set Up Elder
+              </button>
+            </section>
+          </div>
+        )
       ) : null}
 
       {route.view === 'detail' ? (
@@ -1086,6 +2025,9 @@ export default function App() {
               <span>Email</span>
               <strong>{authUser.email}</strong>
             </div>
+            <button type="button" className="record-save-button" onClick={() => navigate('/family-tree')}>
+              View Family Tree
+            </button>
             <button type="button" className="record-save-button account-logout-btn" onClick={() => void handleLogout()}>
               Logout
             </button>
@@ -1101,10 +2043,22 @@ export default function App() {
         <nav className="bottom-nav">
           <span
             className={`nav-indicator ${
-              route.view === 'record' ? 'is-record' : route.view === 'memory-map' ? 'is-memory-map' : 'is-home'
+              route.view === 'record'
+                ? 'is-record'
+                : route.view === 'memory-map'
+                  ? 'is-memory-map'
+                  : route.view === 'family-tree' || route.view === 'family-graph'
+                    ? 'is-family-tree'
+                    : 'is-home'
             }`}
           />
           <button className={route.view === 'home' ? 'active' : ''} onClick={() => navigate('/')}>Home</button>
+          <button
+            className={route.view === 'family-tree' || route.view === 'family-graph' ? 'active' : ''}
+            onClick={() => navigate('/family-tree')}
+          >
+            Family Tree
+          </button>
           <button
             className={route.view === 'memory-map' ? 'active' : ''}
             onClick={() => navigate('/memory-map')}
@@ -1203,6 +2157,121 @@ export default function App() {
             </button>
           </div>
         </section>
+      ) : null}
+
+      {elderModalOpen ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => !elderSubmitting && setElderModalOpen(false)}>
+          <section
+            className="panel elder-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="elder-setup-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="elder-setup-title">Set Up Elder</h2>
+            <p className="meta">Create the elder root profile for your family tree.</p>
+            <form className="elder-form" onSubmit={submitElderSetupForm}>
+              <input
+                type="text"
+                className="title-input"
+                placeholder="Elder display name"
+                value={elderDisplayName}
+                onChange={(e) => setElderDisplayName(e.target.value)}
+              />
+              <input
+                type="number"
+                min={1800}
+                max={2100}
+                className="title-input"
+                placeholder="Birth year (optional)"
+                value={elderBirthYear}
+                onChange={(e) => setElderBirthYear(e.target.value)}
+              />
+              <input
+                type="text"
+                className="title-input"
+                placeholder="Age range (optional)"
+                value={elderAgeRange}
+                onChange={(e) => setElderAgeRange(e.target.value)}
+              />
+              <input
+                type="text"
+                className="title-input"
+                placeholder="Preferred language (optional)"
+                value={elderPreferredLanguage}
+                onChange={(e) => setElderPreferredLanguage(e.target.value)}
+              />
+              <input
+                type="text"
+                className="title-input"
+                placeholder="Home region (optional)"
+                value={elderHomeRegion}
+                onChange={(e) => setElderHomeRegion(e.target.value)}
+              />
+              <label className="consent-row">
+                <input
+                  type="checkbox"
+                  checked={elderConsent}
+                  onChange={(e) => setElderConsent(e.target.checked)}
+                />
+                <span>I confirm elder consent for this project.</span>
+              </label>
+              {elderSetupError ? <p className="error-text">{elderSetupError}</p> : null}
+              <div className="elder-form-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setElderModalOpen(false)}
+                  disabled={elderSubmitting}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="record-save-button" disabled={elderSubmitting}>
+                  {elderSubmitting ? 'Saving...' : 'Save Elder'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {confirmModalOpen ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => !confirmDeleting && setConfirmModalOpen(false)}>
+          <section
+            className="panel elder-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-delete-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="confirm-delete-title">
+              {confirmDeleteType === 'person' ? 'Delete Member' : 'Delete Relationship'}
+            </h2>
+            <p className="meta">
+              {confirmDeleteType === 'person'
+                ? `Delete ${confirmDeleteLabel}? This also removes connected relationships.`
+                : `Delete this relationship: ${confirmDeleteLabel}?`}
+            </p>
+            <div className="elder-form-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setConfirmModalOpen(false)}
+                disabled={confirmDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="record-save-button"
+                onClick={() => void confirmDeleteAction()}
+                disabled={confirmDeleting}
+              >
+                {confirmDeleting ? 'Deleting...' : 'Confirm Delete'}
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
     </main>
   )

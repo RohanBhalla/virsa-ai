@@ -17,6 +17,8 @@ from .config import (
     MONGODB_PLAYBACK_COLLECTION,
     MONGODB_AUTH_SESSIONS_COLLECTION,
     MONGODB_USERS_COLLECTION,
+    MONGODB_FAMILY_PEOPLE_COLLECTION,
+    MONGODB_FAMILY_EDGES_COLLECTION,
 )
 
 
@@ -54,6 +56,14 @@ def sessions_collection() -> Collection:
     return get_db()[MONGODB_AUTH_SESSIONS_COLLECTION]
 
 
+def family_people_collection() -> Collection:
+    return get_db()[MONGODB_FAMILY_PEOPLE_COLLECTION]
+
+
+def family_edges_collection() -> Collection:
+    return get_db()[MONGODB_FAMILY_EDGES_COLLECTION]
+
+
 def init_db() -> None:
     memories_collection().create_index([("id", ASCENDING)], unique=True)
     memories_collection().create_index([("created_at", DESCENDING)])
@@ -75,6 +85,15 @@ def init_db() -> None:
     sessions_collection().create_index([("id", ASCENDING)], unique=True)
     sessions_collection().create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     sessions_collection().create_index([("expires_at", ASCENDING)])
+
+    family_people_collection().create_index([("id", ASCENDING)], unique=True)
+    family_people_collection().create_index([("family_id", ASCENDING)])
+    family_people_collection().create_index([("owner_user_id", ASCENDING), ("family_id", ASCENDING)])
+
+    family_edges_collection().create_index([("id", ASCENDING)], unique=True)
+    family_edges_collection().create_index([("family_id", ASCENDING)])
+    family_edges_collection().create_index([("family_id", ASCENDING), ("from_person_id", ASCENDING)])
+    family_edges_collection().create_index([("family_id", ASCENDING), ("to_person_id", ASCENDING)])
 
 
 def now_iso() -> str:

@@ -1,5 +1,6 @@
 import type {
   AuthResponse,
+  FamilyTree,
   Memory,
   MemoryGraph,
   RelatedMemoryItem,
@@ -156,6 +157,133 @@ export async function register(email: string, password: string, name: string): P
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, name }),
   })
+}
+
+export type ElderRootPayload = {
+  display_name: string
+  birth_year?: number
+  age_range?: string
+  preferred_language?: string
+  home_region?: string
+  consent: boolean
+}
+
+export async function createElderRootFamily(payload: ElderRootPayload): Promise<{
+  family_id: string
+  elder_person_id: string
+  created: boolean
+}> {
+  return fetchJson<{ family_id: string; elder_person_id: string; created: boolean }>(
+    '/api/families/elder-root',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  )
+}
+
+export type PersonWithEdgePayload = {
+  display_name: string
+  given_name?: string
+  family_name?: string
+  sex?: 'female' | 'male' | 'other' | 'unknown'
+  birth_year?: number
+  death_year?: number
+  notes?: string
+  connect_to_person_id: string
+  relationship: 'child' | 'parent' | 'partner' | 'sibling'
+  relationship_type?: 'biological' | 'adoptive' | 'step' | 'guardian' | 'unknown'
+  partner_type?: 'married' | 'partner' | 'divorced' | 'separated' | 'unknown'
+  certainty?: 'certain' | 'estimated' | 'unknown'
+  start_year?: number
+  end_year?: number
+}
+
+export async function getFamilyTree(familyId: string): Promise<FamilyTree> {
+  return fetchJson<FamilyTree>(`/api/families/${familyId}/tree`)
+}
+
+export async function addPersonWithEdge(
+  familyId: string,
+  payload: PersonWithEdgePayload
+): Promise<{
+  family_id: string
+}> {
+  return fetchJson<{ family_id: string }>(`/api/families/${familyId}/people_with_edge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export type UpdateFamilyPersonPayload = {
+  display_name?: string
+  given_name?: string
+  family_name?: string
+  sex?: 'female' | 'male' | 'other' | 'unknown'
+  birth_year?: number | null
+  death_year?: number | null
+  notes?: string
+  age_range?: string
+  preferred_language?: string
+  home_region?: string
+  consent?: boolean
+}
+
+export async function updateFamilyPerson(
+  familyId: string,
+  personId: string,
+  payload: UpdateFamilyPersonPayload
+): Promise<{ person: Record<string, unknown> }> {
+  return fetchJson<{ person: Record<string, unknown> }>(`/api/families/${familyId}/people/${personId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export type CreateFamilyEdgePayload = {
+  kind: 'parent_child' | 'partner'
+  from_person_id: string
+  to_person_id: string
+  relationship_type?: 'biological' | 'adoptive' | 'step' | 'guardian' | 'unknown'
+  partner_type?: 'married' | 'partner' | 'divorced' | 'separated' | 'unknown'
+  certainty?: 'certain' | 'estimated' | 'unknown'
+  start_year?: number
+  end_year?: number
+}
+
+export async function createFamilyEdge(
+  familyId: string,
+  payload: CreateFamilyEdgePayload
+): Promise<{ edge: Record<string, unknown> }> {
+  return fetchJson<{ edge: Record<string, unknown> }>(`/api/families/${familyId}/edges`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteFamilyEdge(
+  familyId: string,
+  edgeId: string
+): Promise<{ deleted: boolean }> {
+  return fetchJson<{ deleted: boolean }>(`/api/families/${familyId}/edges/${edgeId}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function deleteFamilyPerson(
+  familyId: string,
+  personId: string
+): Promise<{ deleted: boolean; edges_deleted: number }> {
+  return fetchJson<{ deleted: boolean; edges_deleted: number }>(
+    `/api/families/${familyId}/people/${personId}`,
+    {
+      method: 'DELETE',
+    }
+  )
 }
 
 export async function login(email: string, password: string): Promise<AuthResponse> {

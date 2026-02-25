@@ -22,6 +22,8 @@ MONGODB_CHUNKS_COLLECTION = os.getenv("MONGODB_CHUNKS_COLLECTION", "memory_chunk
 MONGODB_PLAYBACK_COLLECTION = os.getenv("MONGODB_PLAYBACK_COLLECTION", "playback_positions")
 MONGODB_USERS_COLLECTION = os.getenv("MONGODB_USERS_COLLECTION", "users")
 MONGODB_AUTH_SESSIONS_COLLECTION = os.getenv("MONGODB_AUTH_SESSIONS_COLLECTION", "auth_sessions")
+MONGODB_FAMILY_PEOPLE_COLLECTION = os.getenv("MONGODB_FAMILY_PEOPLE_COLLECTION", "family_people")
+MONGODB_FAMILY_EDGES_COLLECTION = os.getenv("MONGODB_FAMILY_EDGES_COLLECTION", "family_edges")
 MONGODB_VECTOR_INDEX = os.getenv("MONGODB_VECTOR_INDEX", "memory_chunks_vector_index")
 
 # Embedding provider selection. Supported: vertex | gemini | local
