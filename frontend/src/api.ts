@@ -370,6 +370,27 @@ export async function fetchProtectedBlob(path: string): Promise<Blob> {
 
 export type SearchResponse = { query: string; items: Memory[] }
 
+export type GeekReplySource = {
+  memory_id: string
+  title: string
+  speaker_tag: string
+  score: number
+  snippet: string
+}
+
+export type GeekReplyResponse = {
+  query: string
+  speaker: {
+    person_id: string
+    display_name: string
+    family_id: string
+  }
+  reply: string
+  status: string
+  relationship_context: string
+  sources: GeekReplySource[]
+}
+
 export async function searchStories(query: string): Promise<SearchResponse> {
   return fetchJson<SearchResponse>('/api/search', {
     method: 'POST',
@@ -384,6 +405,19 @@ export async function searchStoriesWithAudio(audioBlob: Blob): Promise<SearchRes
   return fetchJson<SearchResponse>('/api/search', {
     method: 'POST',
     body: fd,
+  })
+}
+
+export async function geekReplyAs(payload: {
+  query: string
+  speaker_person_id: string
+  top_k?: number
+  anchor_memory_id?: string
+}): Promise<GeekReplyResponse> {
+  return fetchJson<GeekReplyResponse>('/api/geek/reply-as', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   })
 }
 

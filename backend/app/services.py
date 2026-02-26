@@ -956,3 +956,109 @@ def infer_themes(transcript: str) -> list[str]:
     except Exception:
         logger.exception("infer_themes failed")
         return []
+
+
+def _vertex_generate_text(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    temperature: float = 0.5,
+    model: str | None = None,
+) -> str | None:
+    if not VERTEX_PROJECT_ID or (not VERTEX_API_KEY and not VERTEX_ACCESS_TOKEN):
+        return None
+
+    endpoint = (
+        VERTEX_GENERATIVE_BASE_URL.rstrip("/")
+        if VERTEX_GENERATIVE_BASE_URL
+        else f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com"
+    )
+    selected_model = model or VERTEX_STORY_MODEL
+    model_path = (
+        selected_model
+        if selected_model.startswith("publishers/google/models/")
+        else f"publishers/google/models/{selected_model}"
+    )
+    url = f"{endpoint}/v1/projects/{VERTEX_PROJECT_ID}/locations/{VERTEX_LOCATION}/{model_path}:generateContent"
+
+    headers = {"Content-Type": "application/json"}
+    params: dict[str, str] | None = None
+    if VERTEX_API_KEY:
+        headers["x-goog-api-key"] = VERTEX_API_KEY
+        params = {"key": VERTEX_API_KEY}
+    if VERTEX_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {VERTEX_ACCESS_TOKEN}"
+
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": 700,
+        },
+    }
+
+    try:
+        with httpx.Client(timeout=45) as client:
+            response = client.post(url, params=params, headers=headers, json=payload)
+        response.raise_for_status()
+    except Exception:
+        logger.exception("vertex_generate_text_failed model=%s", selected_model)
+        return None
+
+    body = response.json()
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    first = candidates[0]
+    content = first.get("content") if isinstance(first, dict) else None
+    parts = content.get("parts") if isinstance(content, dict) else None
+    if not isinstance(parts, list):
+        return None
+    for part in parts:
+        text = part.get("text") if isinstance(part, dict) else None
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
+
+
+def generate_reply_as(
+    *,
+    query: str,
+    speaker_name: str,
+    speaker_profile: str,
+    relationship_context: str,
+    retrieval_context: str,
+    anchor_title: str = "",
+) -> tuple[str, str]:
+    clean_query = " ".join((query or "").split())
+    if not clean_query:
+        return "", "missing_query"
+
+    system_prompt = (
+        "You are a family-memory RAG assistant. "
+        f"Reply in first person as: {speaker_name or 'the selected speaker'}. "
+        "Stay grounded in provided memory context and relationship facts. "
+        "If uncertain, acknowledge uncertainty briefly instead of inventing details. "
+        "Keep answer warm, specific, and concise."
+    )
+    user_prompt = (
+        f"User question:\n{textwrap.shorten(clean_query, width=1200, placeholder='...')}\n\n"
+        f"Speaker profile:\n{textwrap.shorten(speaker_profile, width=900, placeholder='...')}\n\n"
+        f"Relationship context:\n{textwrap.shorten(relationship_context, width=1200, placeholder='...')}\n\n"
+        f"Anchor memory title:\n{textwrap.shorten(anchor_title or '(none)', width=200, placeholder='...')}\n\n"
+        f"Retrieved memory context:\n{textwrap.shorten(retrieval_context, width=4500, placeholder='...')}"
+    )
+    reply = _vertex_generate_text(system_prompt, user_prompt, temperature=0.55)
+    if reply:
+        return reply, "generated_vertex"
+
+    # Deterministic fallback for local/offline mode.
+    speaker_intro = f"As {speaker_name}," if speaker_name else "From this family perspective,"
+    context_preview = textwrap.shorten(retrieval_context, width=420, placeholder="...")
+    rel_preview = textwrap.shorten(relationship_context, width=240, placeholder="...")
+    fallback = (
+        f"{speaker_intro} I remember this through our family story: {context_preview} "
+        f"Relationship context: {rel_preview}"
+    )
+    return fallback, "generated_fallback"

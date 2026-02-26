@@ -1754,11 +1754,62 @@ p {
   padding: 0.2rem 0.1rem;
 }
 
-.geek-placeholder {
+.geek-mode-panel {
   border-radius: 12px;
   border: 1px dashed rgba(64, 57, 49, 0.4);
   padding: 1rem;
   background: rgba(255, 255, 255, 0.45);
+  display: grid;
+  gap: 0.7rem;
+}
+
+.geek-controls {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.geek-query-input {
+  min-height: 110px;
+  resize: vertical;
+}
+
+.geek-output {
+  border: 1px solid rgba(30, 28, 26, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.65);
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.geek-output h4 {
+  margin: 0;
+}
+
+.geek-output p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.geek-output pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: "SF Mono", "Menlo", "Consolas", monospace;
+  font-size: 0.8rem;
+}
+
+.geek-sources {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.geek-source-item {
+  border: 1px solid rgba(30, 28, 26, 0.12);
+  border-radius: 10px;
+  padding: 0.6rem;
+  background: rgba(255, 255, 255, 0.75);
+  display: grid;
+  gap: 0.2rem;
 }
 
 .detail-back {

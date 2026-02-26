@@ -50,6 +50,7 @@ from .rag import (
     search_stories,
 )
 from .services import (
+    generate_reply_as,
     generate_story_variants,
     generate_cover_svg,
     infer_mood_tag,
@@ -182,6 +183,13 @@ class CreateFamilyEdgeRequest(BaseModel):
     certainty: Literal["certain", "estimated", "unknown"] = "unknown"
     start_year: int | None = Field(default=None, ge=1800, le=2100)
     end_year: int | None = Field(default=None, ge=1800, le=2100)
+
+
+class GeekReplyRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=3000)
+    speaker_person_id: str = Field(min_length=1, max_length=64)
+    top_k: int = Field(default=8, ge=1, le=20)
+    anchor_memory_id: str = Field(default="", max_length=64)
 
 
 def _request_client_meta(request: Request) -> tuple[str | None, str | None]:
@@ -920,6 +928,62 @@ def _owned_memory_or_404(memory_id: str, user_id: str, projection: dict | None =
     return row
 
 
+def _speaker_profile_text(person: dict) -> str:
+    bits = [
+        f"Name: {str(person.get('display_name') or '').strip() or 'Unknown'}",
+        f"Age range: {str(person.get('age_range') or '').strip() or 'unknown'}",
+        f"Preferred language: {str(person.get('preferred_language') or '').strip() or 'unknown'}",
+        f"Home region: {str(person.get('home_region') or '').strip() or 'unknown'}",
+        f"Notes: {str(person.get('notes') or '').strip() or 'none'}",
+    ]
+    return "\n".join(bits)
+
+
+def _relationship_context_text(owner_user_id: str, family_id: str, speaker_person_id: str) -> str:
+    people = list(
+        family_people_collection().find(
+            {"owner_user_id": owner_user_id, "family_id": family_id},
+            {"_id": 0, "id": 1, "display_name": 1},
+        )
+    )
+    by_id = {str(p.get("id") or ""): str(p.get("display_name") or "").strip() or "Unknown" for p in people}
+
+    edges = list(
+        family_edges_collection().find(
+            {
+                "owner_user_id": owner_user_id,
+                "family_id": family_id,
+                "$or": [{"from_person_id": speaker_person_id}, {"to_person_id": speaker_person_id}],
+            },
+            {"_id": 0},
+        )
+    )
+    if not edges:
+        return "No direct relationship edges found for selected speaker."
+
+    lines: list[str] = []
+    speaker_name = by_id.get(speaker_person_id, "Selected speaker")
+    for edge in edges[:10]:
+        kind = str(edge.get("kind") or "")
+        from_id = str(edge.get("from_person_id") or "")
+        to_id = str(edge.get("to_person_id") or "")
+        other_id = to_id if from_id == speaker_person_id else from_id
+        other_name = by_id.get(other_id, other_id or "Unknown")
+
+        if kind == "partner":
+            partner_type = str(edge.get("partner_type") or "unknown")
+            lines.append(f"{speaker_name} is connected as partner to {other_name} ({partner_type}).")
+            continue
+
+        rel_type = str(edge.get("relationship_type") or "unknown")
+        if from_id == speaker_person_id:
+            lines.append(f"{speaker_name} is parent/guardian of {other_name} ({rel_type}).")
+        else:
+            lines.append(f"{speaker_name} is child/dependent of {other_name} ({rel_type}).")
+
+    return "\n".join(lines)
+
+
 @app.post("/api/memories")
 async def create_memory(
     audio: UploadFile = File(...),
@@ -1211,6 +1275,115 @@ async def search_memories(
             logger.info("  [%d] id=%s title=%r score=%.4f", rank, mem_id, title, score)
 
     return {"query": search_query, "items": ordered}
+
+
+@app.post("/api/geek/reply-as")
+def geek_reply_as(body: GeekReplyRequest, user: dict = Depends(get_current_user)) -> dict:
+    clean_user_id = _user_id(user)
+    clean_query = (body.query or "").strip()
+    if not clean_query:
+        raise HTTPException(status_code=400, detail="Query is required.")
+
+    speaker = family_people_collection().find_one(
+        {"owner_user_id": clean_user_id, "id": body.speaker_person_id},
+        {"_id": 0},
+    )
+    if not speaker:
+        raise HTTPException(status_code=404, detail="Selected speaker not found.")
+
+    family_id = str(speaker.get("family_id") or "").strip()
+    speaker_name = str(speaker.get("display_name") or "").strip() or "Selected speaker"
+    relationship_context = _relationship_context_text(clean_user_id, family_id, body.speaker_person_id)
+    speaker_profile = _speaker_profile_text(speaker)
+
+    hits = search_stories(clean_user_id, clean_query, top_k=body.top_k)
+    ordered_ids = [mid for mid, _, _ in hits]
+    if body.anchor_memory_id and body.anchor_memory_id not in ordered_ids:
+        row = memories_collection().find_one(
+            {"id": body.anchor_memory_id, "user_id": clean_user_id},
+            {"_id": 0, "id": 1},
+        )
+        if row:
+            ordered_ids.insert(0, body.anchor_memory_id)
+
+    score_by_id = {mid: float(score) for mid, score, _ in hits}
+    snippet_by_id = {mid: str(snippet or "") for mid, _, snippet in hits}
+
+    rows = list(
+        memories_collection().find(
+            {"id": {"$in": ordered_ids}, "user_id": clean_user_id},
+            {
+                "_id": 0,
+                "id": 1,
+                "title": 1,
+                "speaker_tag": 1,
+                "ai_summary": 1,
+                "story_children": 1,
+                "story_narration": 1,
+                "transcript": 1,
+            },
+        )
+    )
+    by_id = {str(r.get("id") or ""): r for r in rows}
+
+    sources: list[dict[str, object]] = []
+    context_blocks: list[str] = []
+    for mid in ordered_ids:
+        row = by_id.get(mid)
+        if not row:
+            continue
+        title = str(row.get("title") or "Untitled")
+        speaker_tag = str(row.get("speaker_tag") or "Unknown")
+        content = (
+            str(row.get("story_narration") or "")
+            or str(row.get("story_children") or "")
+            or str(row.get("ai_summary") or "")
+            or str(row.get("transcript") or "")
+        )
+        content = " ".join(content.split())
+        snippet = snippet_by_id.get(mid) or (content[:220] + ("..." if len(content) > 220 else ""))
+        score = score_by_id.get(mid, 0.0)
+        sources.append(
+            {
+                "memory_id": mid,
+                "title": title,
+                "speaker_tag": speaker_tag,
+                "score": round(score, 4),
+                "snippet": snippet,
+            }
+        )
+        context_blocks.append(
+            f"Memory: {title}\nSpeaker: {speaker_tag}\nRelevance: {score:.4f}\nContent: {content[:1200]}"
+        )
+
+    anchor_title = ""
+    if body.anchor_memory_id:
+        anchor_row = by_id.get(body.anchor_memory_id)
+        if anchor_row:
+            anchor_title = str(anchor_row.get("title") or "")
+
+    retrieval_context = "\n\n".join(context_blocks)
+    reply, status = generate_reply_as(
+        query=clean_query,
+        speaker_name=speaker_name,
+        speaker_profile=speaker_profile,
+        relationship_context=relationship_context,
+        retrieval_context=retrieval_context,
+        anchor_title=anchor_title,
+    )
+
+    return {
+        "query": clean_query,
+        "speaker": {
+            "person_id": body.speaker_person_id,
+            "display_name": speaker_name,
+            "family_id": family_id,
+        },
+        "reply": reply,
+        "status": status,
+        "relationship_context": relationship_context,
+        "sources": sources,
+    }
 
 
 @app.get("/api/memories/{memory_id}")
