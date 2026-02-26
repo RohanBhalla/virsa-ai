@@ -1372,6 +1372,22 @@ def geek_reply_as(body: GeekReplyRequest, user: dict = Depends(get_current_user)
         anchor_title=anchor_title,
     )
 
+    top_scores = ", ".join(
+        f"{str(src.get('title') or 'Untitled')[:24]}:{float(src.get('score') or 0.0):.3f}"
+        for src in sources[:3]
+    ) or "none"
+    logger.info(
+        "geek_reply_as user=%s speaker=%s query_len=%d hits=%d status=%s rel_lines=%d ctx_chars=%d top=%s",
+        clean_user_id,
+        speaker_name[:40],
+        len(clean_query),
+        len(sources),
+        status,
+        len([line for line in relationship_context.splitlines() if line.strip()]),
+        len(retrieval_context),
+        top_scores,
+    )
+
     return {
         "query": clean_query,
         "speaker": {

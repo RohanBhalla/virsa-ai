@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { forceX, forceY } from 'd3-force-3d'
+import { forceCollide, forceX, forceY } from 'd3-force-3d'
 import ForceGraph2D from 'react-force-graph-2d'
 import { addPersonWithEdge, createFamilyEdge, getFamilyTree } from '../api'
 import type { FamilyTree } from '../types'
@@ -65,6 +65,17 @@ function ellipsizeLabel(ctx: CanvasRenderingContext2D, text: string, maxWidth: n
     out = out.slice(0, -1)
   }
   return `${out}…`
+}
+
+function estimateNodeWidth(label: string): number {
+  return Math.min(170, Math.max(84, 54 + label.length * 5.3))
+}
+
+function collisionRadius(node: GraphNode): number {
+  const width = estimateNodeWidth(node.label || '')
+  const height = node.isElder ? 42 : 38
+  const diagonal = Math.sqrt(width * width + height * height)
+  return diagonal * 0.52 + 8
 }
 
 export function FamilyGraphView({ familyId, onBack }: FamilyGraphViewProps) {
@@ -245,6 +256,7 @@ export function FamilyGraphView({ familyId, onBack }: FamilyGraphViewProps) {
       ).strength(0.24)
     )
     graph?.d3Force('x', forceX<GraphNode>(graphSize.width / 2).strength(0.06))
+    graph?.d3Force('collide', forceCollide<GraphNode>((node: GraphNode) => collisionRadius(node)).iterations(3))
     graph?.d3ReheatSimulation()
   }, [graphData, graphSize.height, graphSize.width])
 
@@ -430,7 +442,7 @@ export function FamilyGraphView({ familyId, onBack }: FamilyGraphViewProps) {
               const label = n.label || ''
               const fontSize = (n.isElder ? 12.4 : 11.8) / globalScale
               const nodeHeight = (n.isElder ? 42 : 38) / globalScale
-              const nodeWidth = Math.min(170 / globalScale, Math.max(84 / globalScale, (54 + label.length * 5.3) / globalScale))
+              const nodeWidth = estimateNodeWidth(label) / globalScale
               const cornerRadius = nodeHeight * 0.34
               const isSelected = n.id === selectedPersonId
               const baseColor = n.isElder ? '#c9730c' : '#3e5f7d'

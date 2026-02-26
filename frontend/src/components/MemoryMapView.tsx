@@ -34,7 +34,6 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
   const [themeFilter, setThemeFilter] = useState<string>('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [related, setRelated] = useState<{ memory: Memory; score: number }[]>([])
-  const [trail, setTrail] = useState<string[]>([])
   const graphWrapRef = useRef<HTMLDivElement>(null)
   const fgRef = useRef<ForceGraphMethods<NodeObject<MemoryNode>, LinkObject<MemoryNode, GraphLink>> | undefined>(undefined)
   const [graphSize, setGraphSize] = useState({ width: 600, height: 400 })
@@ -139,35 +138,10 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
     }
   }, [graphData, themeClusterPositions])
 
-  const handleNodeClick = useCallback(
-    (node: MemoryNode) => {
-      onNavigate(`/recordings/${node.id}`)
-    },
-    [onNavigate]
-  )
-
-  const handleNodeRightClick = useCallback((node: MemoryNode) => {
+  const handleNodeSelect = useCallback((node: MemoryNode) => {
     setSelectedId(node.id)
     getRelatedMemories(node.id, 8).then((res) => setRelated(res.items.map((i) => ({ memory: i.memory, score: i.score }))))
-    setTrail([])
   }, [])
-
-  const buildTrail = useCallback(() => {
-    if (!selectedId || !graph) return
-    const edges = graph.edges
-    const idSet = new Set(graph.nodes.map((n) => n.id))
-    const steps = 3
-    const path: string[] = [selectedId]
-    let current = selectedId
-    for (let i = 0; i < steps; i++) {
-      const next = edges.find((e) => e.source === current && idSet.has(e.target))?.target
-        ?? edges.find((e) => e.target === current && idSet.has(e.source))?.source
-      if (!next || path.includes(next)) break
-      path.push(next)
-      current = next
-    }
-    setTrail(path)
-  }, [selectedId, graph])
 
   const nodeColor = useCallback((node: MemoryNode) => {
     const t = (node.themes ?? [])[0]
@@ -177,6 +151,11 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
   const linkWidth = useCallback((link: GraphLink) => {
     return Math.max(0.5, Math.min(2, link.score * 2))
   }, [])
+
+  const selectedMemory = useMemo(
+    () => (selectedId ? graphData.nodes.find((n) => n.id === selectedId) ?? null : null),
+    [graphData.nodes, selectedId]
+  )
 
   const nodeCanvasObject = useCallback(
     (node: MemoryNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -195,12 +174,13 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
       }
       const h = fontSize + padding * 2
       const r = Math.max(12, Math.min(20, 8 + (globalScale > 1 ? 4 : 0)))
+      const isSelected = selectedId === node.id
       ctx.beginPath()
       ctx.arc(x, y, r, 0, 2 * Math.PI)
       ctx.fillStyle = nodeColor(node)
       ctx.fill()
-      ctx.strokeStyle = 'rgba(255,255,255,0.4)'
-      ctx.lineWidth = 1
+      ctx.strokeStyle = isSelected ? 'rgba(255, 224, 102, 0.95)' : 'rgba(255,255,255,0.4)'
+      ctx.lineWidth = isSelected ? 3 : 1
       ctx.stroke()
       ctx.fillStyle = 'rgba(24,21,18,0.9)'
       ctx.font = `${fontSize}px sans-serif`
@@ -208,12 +188,20 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
       ctx.textBaseline = 'middle'
       ctx.fillText(shortLabel, x, y + r + h / 2 + 2)
     },
-    [nodeColor]
+    [nodeColor, selectedId]
+  )
+
+  const header = (
+    <div className="memory-map-header">
+      <h2>Memory Map</h2>
+      <p className="meta">Explore how your stories connect through shared themes and relationships.</p>
+    </div>
   )
 
   if (loading) {
     return (
       <div className="view-shell memory-map-view">
+        {header}
         <div className="memory-map-loading">
           <p className="meta">Loading Memory Map...</p>
         </div>
@@ -224,6 +212,7 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
   if (error) {
     return (
       <div className="view-shell memory-map-view">
+        {header}
         <div className="memory-map-error panel">
           <p className="error-text">{error}</p>
           <button type="button" className="btn btn-primary" onClick={fetchGraph}>Retry</button>
@@ -235,6 +224,7 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
   if (!graph || graph.nodes.length === 0) {
     return (
       <div className="view-shell memory-map-view">
+        {header}
         <div className="memory-map-empty panel">
           <p className="meta">No memories to map. Transcribe some stories to see connections.</p>
           <button type="button" className="btn btn-primary" onClick={() => onNavigate('/record')}>Record</button>
@@ -245,6 +235,7 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
 
   return (
     <div className="view-shell memory-map-view">
+      {header}
       <div className="memory-map-toolbar">
         <label className="memory-map-theme-label">
           Theme:
@@ -262,41 +253,50 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
         </label>
         {selectedId ? (
           <>
-            <button type="button" className="btn btn-secondary memory-map-trail-btn" onClick={buildTrail}>
-              Build trail from selected
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={() => { setSelectedId(null); setRelated([]); setTrail([]); }}>
+            <button type="button" className="btn btn-secondary memory-map-trail-btn" onClick={() => { setSelectedId(null); setRelated([]); }}>
               Clear selection
             </button>
           </>
         ) : null}
       </div>
-      <div className="memory-map-graph-wrap" ref={graphWrapRef}>
-        <ForceGraph2D
-          ref={fgRef}
-          graphData={graphData}
-          nodeId="id"
-          nodeLabel={(n) => (n as MemoryNode).title ?? n.id}
-          nodeColor={nodeColor}
-          nodeRelSize={6}
-          nodeCanvasObjectMode="replace"
-          nodeCanvasObject={nodeCanvasObject}
-          linkSource="source"
-          linkTarget="target"
-          linkWidth={linkWidth}
-          linkDirectionalArrowLength={0}
-          onNodeClick={(n) => handleNodeClick(n as MemoryNode)}
-          onNodeRightClick={(node, event) => { event.preventDefault(); handleNodeRightClick(node as MemoryNode); }}
-          width={graphSize.width}
-          height={graphSize.height}
-          backgroundColor="rgba(255,255,255,0.02)"
-          d3VelocityDecay={0.35}
-          cooldownTicks={100}
-          cooldownTime={3000}
-        />
-      </div>
-      {(related.length > 0 || trail.length > 0) && (
+      <div className="memory-map-main">
+        <div className="memory-map-graph-wrap" ref={graphWrapRef}>
+          <ForceGraph2D
+            ref={fgRef}
+            graphData={graphData}
+            nodeId="id"
+            nodeLabel={(n) => (n as MemoryNode).title ?? n.id}
+            nodeColor={nodeColor}
+            nodeRelSize={6}
+            nodeCanvasObjectMode="replace"
+            nodeCanvasObject={nodeCanvasObject}
+            linkSource="source"
+            linkTarget="target"
+            linkWidth={linkWidth}
+            linkDirectionalArrowLength={0}
+            onNodeClick={(n) => handleNodeSelect(n as MemoryNode)}
+            onNodeRightClick={(node, event) => { event.preventDefault(); handleNodeSelect(node as MemoryNode); }}
+            width={graphSize.width}
+            height={graphSize.height}
+            backgroundColor="rgba(255,255,255,0.02)"
+            d3VelocityDecay={0.35}
+            cooldownTicks={100}
+            cooldownTime={3000}
+          />
+        </div>
         <div className="memory-map-sidebar panel">
+          {!selectedMemory ? (
+            <p className="meta">Select a node to view its original story.</p>
+          ) : (
+            <div className="memory-map-details">
+              <h3>{selectedMemory.title || 'Untitled'}</h3>
+              <div className="memory-map-text-block">
+                <h4>Original Story</h4>
+                <p>{selectedMemory.transcript || '-'}</p>
+              </div>
+            </div>
+          )}
+
           {related.length > 0 && (
             <div className="memory-map-related">
               <h3>Related stories</h3>
@@ -325,29 +325,8 @@ export function MemoryMapView({ onNavigate }: MemoryMapViewProps) {
               </ul>
             </div>
           )}
-          {trail.length > 0 && (
-            <div className="memory-map-trail">
-              <h3>Narrative trail</h3>
-              <ol className="memory-map-trail-list">
-                {trail.map((id, idx) => {
-                  const node = graphData.nodes.find((n) => n.id === id)
-                  return (
-                    <li key={id}>
-                      <button
-                        type="button"
-                        className="memory-map-trail-item"
-                        onClick={() => node && onNavigate(`/recordings/${id}`)}
-                      >
-                        {idx + 1}. {node?.title ?? id}
-                      </button>
-                    </li>
-                  )
-                })}
-              </ol>
-            </div>
-          )}
         </div>
-      )}
+      </div>
     </div>
   )
 }

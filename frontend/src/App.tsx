@@ -62,6 +62,15 @@ function formatMemoryTag(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+function shuffleArray<T>(items: T[]): T[] {
+  const copy = [...items]
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy
+}
+
 function animateScrollByX(el: HTMLElement, distance: number) {
   const maxLeft = Math.max(0, el.scrollWidth - el.clientWidth)
   const target = Math.min(maxLeft, Math.max(0, el.scrollLeft + distance))
@@ -402,14 +411,6 @@ export default function App() {
   const [geekLoading, setGeekLoading] = useState(false)
   const [geekError, setGeekError] = useState('')
   const [geekReply, setGeekReply] = useState('')
-  const [geekRelationshipContext, setGeekRelationshipContext] = useState('')
-  const [geekSources, setGeekSources] = useState<Array<{
-    memory_id: string
-    title: string
-    speaker_tag: string
-    score: number
-    snippet: string
-  }>>([])
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const lyricLineRefs = useRef<Array<HTMLButtonElement | null>>([])
   const profileMenuRef = useRef<HTMLDivElement | null>(null)
@@ -764,7 +765,7 @@ export default function App() {
   }, [searchApiResults, lastSearchQuery, filter, searchResults])
 
   const recommended = useMemo(
-    () => memories.filter((m) => m.cover_path && m.ai_summary).slice(0, 8),
+    () => shuffleArray(memories.filter((m) => m.cover_path && m.ai_summary)).slice(0, 8),
     [memories],
   )
 
@@ -806,7 +807,7 @@ export default function App() {
           ? detailItem?.story_children || ''
           : detailItem?.transcript || ''
   const bookRightTitle =
-    detailMode === 'reader' ? readerVersionLabel : detailMode === 'listener' ? `Now Playing: ${activeListenerLabel}` : 'Geek Mode Preview'
+    detailMode === 'reader' ? readerVersionLabel : detailMode === 'listener' ? `Now Playing: ${activeListenerLabel}` : 'Talk to Your Family'
   const bookRightBody =
     detailMode === 'reader'
       ? trimPreview(readerVersionText)
@@ -915,8 +916,6 @@ export default function App() {
     setGeekQuery('')
     setGeekError('')
     setGeekReply('')
-    setGeekRelationshipContext('')
-    setGeekSources([])
   }, [detailItem?.id])
 
   useEffect(() => {
@@ -1492,13 +1491,9 @@ export default function App() {
         anchor_memory_id: detailItem.id,
       })
       setGeekReply(result.reply || '')
-      setGeekRelationshipContext(result.relationship_context || '')
-      setGeekSources(result.sources || [])
     } catch (err) {
       setGeekError(err instanceof Error ? err.message : 'Failed to run reply-as query')
       setGeekReply('')
-      setGeekRelationshipContext('')
-      setGeekSources([])
     } finally {
       setGeekLoading(false)
     }
@@ -1525,7 +1520,7 @@ export default function App() {
     return (
       <main className="page auth-page">
         <header className="auth-topbar">
-          <div className="auth-brand">V</div>
+          <div className="auth-brand auth-brand-wordmark">Virasat.ai</div>
           <div className="auth-toggle-pill" role="tablist" aria-label="Auth mode">
             <button
               type="button"
@@ -1649,15 +1644,6 @@ export default function App() {
         <div className="view-shell">
           <CoverRail title="Recommended Stories" items={recommended} />
           <CoverRail title="Recent Stories" items={recent} />
-          <section className="panel family-tree-cta">
-            <div>
-              <h2>Family Tree</h2>
-              <p className="meta">Build and explore your elder-root family graph.</p>
-            </div>
-            <button type="button" className="record-save-button" onClick={() => navigate('/family-tree')}>
-              View Family Tree
-            </button>
-          </section>
 
           <section className="panel">
             <div className="section-head">
@@ -2377,15 +2363,15 @@ export default function App() {
                       >
                         Listener Mode
                       </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={detailMode === 'geek'}
-                        className={`detail-mode-tab ${detailMode === 'geek' ? 'active' : ''}`}
-                        onClick={() => setDetailMode('geek')}
-                      >
-                        Geek Mode
-                      </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={detailMode === 'geek'}
+                      className={`detail-mode-tab ${detailMode === 'geek' ? 'active' : ''}`}
+                      onClick={() => setDetailMode('geek')}
+                    >
+                      Talk to Your Family
+                    </button>
                     </div>
                     {detailMode === 'reader' ? (
                       <div className="detail-versions" role="tablist" aria-label="Reader versions">
@@ -2548,6 +2534,46 @@ export default function App() {
                             </audio>
                           </div>
                         </div>
+                      ) : detailMode === 'geek' ? (
+                        <div className="geek-chat-panel">
+                          <h3>Talk to Your Family</h3>
+                          <label className="meta" htmlFor="geek-speaker">Reply As</label>
+                          <select
+                            id="geek-speaker"
+                            className="title-input"
+                            value={geekSpeakerPersonId}
+                            onChange={(event) => setGeekSpeakerPersonId(event.target.value)}
+                          >
+                            {existingSpeakers.map((speaker) => (
+                              <option key={speaker.person_id} value={speaker.person_id}>
+                                {speaker.display_name}
+                              </option>
+                            ))}
+                          </select>
+                          <textarea
+                            id="geek-query"
+                            className="title-input geek-query-input"
+                            value={geekQuery}
+                            onChange={(event) => setGeekQuery(event.target.value)}
+                            placeholder="Ask a family-memory question..."
+                          />
+                          <button
+                            type="button"
+                            className="record-save-button"
+                            onClick={() => void runGeekReplyAs()}
+                            disabled={geekLoading || !geekSpeakerPersonId || !geekQuery.trim()}
+                          >
+                            {geekLoading ? 'Thinking...' : 'Send'}
+                          </button>
+                          {geekError ? <p className="meta">{geekError}</p> : null}
+                          {geekReply ? (
+                            <div className="geek-chat-reply">
+                              <p>{geekReply}</p>
+                            </div>
+                          ) : (
+                            <p className="meta">Ask a question and get a response in the selected speaker&apos;s voice.</p>
+                          )}
+                        </div>
                       ) : (
                         <>
                           <h3>{bookRightTitle}</h3>
@@ -2557,73 +2583,6 @@ export default function App() {
                     </article>
                   </div>
 
-                  {detailMode === 'geek' ? (
-                    <section className="detail-block geek-mode-panel">
-                      <h3>Geek Mode · Reply As (RAG + Relationships)</h3>
-                      <div className="geek-controls">
-                        <label className="meta" htmlFor="geek-speaker">Reply As Speaker</label>
-                        <select
-                          id="geek-speaker"
-                          className="title-input"
-                          value={geekSpeakerPersonId}
-                          onChange={(event) => setGeekSpeakerPersonId(event.target.value)}
-                        >
-                          {existingSpeakers.map((speaker) => (
-                            <option key={speaker.person_id} value={speaker.person_id}>
-                              {speaker.display_name}
-                            </option>
-                          ))}
-                        </select>
-                        <label className="meta" htmlFor="geek-query">Question</label>
-                        <textarea
-                          id="geek-query"
-                          className="title-input geek-query-input"
-                          value={geekQuery}
-                          onChange={(event) => setGeekQuery(event.target.value)}
-                          placeholder="Ask something like: How would you describe this memory to your grandchildren?"
-                        />
-                        <button
-                          type="button"
-                          className="record-save-button"
-                          onClick={() => void runGeekReplyAs()}
-                          disabled={geekLoading || !geekSpeakerPersonId || !geekQuery.trim()}
-                        >
-                          {geekLoading ? 'Running...' : 'Run Reply-As'}
-                        </button>
-                      </div>
-
-                      {geekError ? <p className="meta">{geekError}</p> : null}
-
-                      {geekReply ? (
-                        <article className="geek-output">
-                          <h4>Model Reply</h4>
-                          <p>{geekReply}</p>
-                        </article>
-                      ) : null}
-
-                      {geekRelationshipContext ? (
-                        <article className="geek-output">
-                          <h4>Relationship Context Used</h4>
-                          <pre>{geekRelationshipContext}</pre>
-                        </article>
-                      ) : null}
-
-                      {geekSources.length > 0 ? (
-                        <article className="geek-output">
-                          <h4>Retrieved Sources</h4>
-                          <div className="geek-sources">
-                            {geekSources.map((source) => (
-                              <div key={source.memory_id} className="geek-source-item">
-                                <strong>{source.title}</strong>
-                                <p className="meta">Speaker: {source.speaker_tag} · Score: {source.score.toFixed(4)}</p>
-                                <p>{source.snippet}</p>
-                              </div>
-                            ))}
-                          </div>
-                        </article>
-                      ) : null}
-                    </section>
-                  ) : null}
                 </section>
               </>
             ) : (
